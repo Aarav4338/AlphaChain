@@ -1,0 +1,47 @@
+[Unit]
+Description=AlphaChain Autonomous 24/7 Quantitative Trading Daemon
+Documentation=https://github.com/alphachain/trading-system
+After=network.target network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/alphachain
+
+# Load secrets from isolated .env file
+EnvironmentFile=/opt/alphachain/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/alphachain
+
+# Binary execution from dedicated virtual environment
+ExecStart=/opt/alphachain/venv/bin/python3 scripts/run_bot.py
+
+# 24/7 High-Availability & Auto-Restart Policies
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
+SendSIGKILL=yes
+KillMode=mixed
+
+# Resource Governance & Security Hardening
+LimitNOFILE=65536
+MemoryHigh=1800M
+MemoryMax=2048M
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/alphachain/data /opt/alphachain/logs
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Centralized Journald Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alphachain
+
+[Install]
+WantedBy=multi-user.target

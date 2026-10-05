@@ -1,0 +1,57 @@
+# Environment variables and secrets (CRITICAL: never commit credentials)
+.env
+*.env
+.env.*
+!.env.example
+
+# Cloud & SSH credentials / private keys
+*.pem
+*.key
+*.cer
+*.pfx
+*.ppk
+id_rsa*
+id_ed25519*
+
+# Python caches and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Local databases and runtime state
+*.db
+*.sqlite3
+data/trading.db
+data/*.csv
+data/cache/
+
+# Runtime logs
+logs/
+*.log
+
+# Pytest / Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Subagent internal orchestration files
+.agents/
+ORIGINAL_REQUEST.md
+PROJECT.md
+TEST_INFRA.md
+TEST_READY.md
+deploy/deployment_state.json
+
+# IDE / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
