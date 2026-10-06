@@ -48,18 +48,18 @@ class OrderSizeResult:
 
 class PositionSizer:
     DEFAULT_PRECISIONS: Dict[str, int] = {
-        "BTC/USD": 5,
-        "ETH/USD": 4,
-        "SOL/USD": 3,
-        "BNB/USD": 3,
-        "XRP/USD": 1,
-        "DOGE/USD": 0,
-        "ADA/USD": 1,
-        "AVAX/USD": 2,
-        "LINK/USD": 2,
-        "NEAR/USD": 1,
-        "SUI/USD": 1,
-        "APT/USD": 2,
+        "BTC/USD": 5, "ETH/USD": 4, "SOL/USD": 3, "BNB/USD": 3, "XRP/USD": 1,
+        "DOGE/USD": 0, "ADA/USD": 1, "AVAX/USD": 2, "LINK/USD": 2, "NEAR/USD": 1,
+        "SUI/USD": 1, "APT/USD": 2,
+        # Tokenized Tech & Crypto-Proxy Stocks
+        "NVDAB/USD": 3, "TSLAB/USD": 3, "MSTRB/USD": 3, "COINB/USD": 3, "PLTRB/USD": 3,
+        "AMDB/USD": 3, "GOOGLB/USD": 3, "METAB/USD": 3, "MSFTB/USD": 3,
+        # High-Momentum Altcoins
+        "AAVE/USD": 3, "ARB/USD": 1, "BONK/USD": 0, "CRV/USD": 1, "DOT/USD": 2,
+        "ENA/USD": 2, "FET/USD": 1, "FIL/USD": 2, "ICP/USD": 2, "LTC/USD": 3,
+        "ONDO/USD": 1, "PENDLE/USD": 1, "PEPE/USD": 0, "POL/USD": 1, "SEI/USD": 1,
+        "SHIB/USD": 0, "TAO/USD": 4, "TON/USD": 2, "TRX/USD": 1, "UNI/USD": 2,
+        "WIF/USD": 2, "WLD/USD": 1, "XLM/USD": 0,
     }
 
     def __init__(self, amount_precisions: Optional[Dict[str, int]] = None):
@@ -265,17 +265,19 @@ class PositionSizer:
         current_open_positions: Optional[Union[List[Dict[str, Any]], List[Any], float]] = None,
         regime: Optional[MarketRegime] = None,
         current_open_risk_heat: Optional[float] = None,
+        current_drawdown: float = 0.0,
     ) -> List[OrderSizeResult]:
         r"""
         Dynamically partitions available risk heat budget and capital across qualifying signals.
         Enforces:
-        - Total cumulative risk heat invariant: \sum \rho_i <= H_avail <= 1.0% (MAX_PORTFOLIO_HEAT_PCT)
-        - Single asset risk ceiling: \rho_i <= 0.50% (MAX_RISK_PER_ASSET_PCT)
-        - Cash reserve invariant: free_usd - capital_deployed >= 25% * portfolio_equity
-        - Per-coin capital concentration cap: <= min(20%, 75% / (K_open + N))
+        - Distance-to-Cliff Governor: Scales available risk heat smoothly down as drawdown approaches 4.0%
+        - Total cumulative risk heat invariant: \sum \rho_i <= H_avail <= MAX_PORTFOLIO_HEAT_PCT
+        - Single asset risk ceiling: \rho_i <= MAX_RISK_PER_ASSET_PCT
+        - Cash reserve invariant: free_usd - capital_deployed >= MIN_CASH_BUFFER_PCT * portfolio_equity
+        - Per-coin capital concentration cap: <= min(MAX_ALLOCATION_PER_COIN_PCT, Available Cash / Active Coins)
         - Regime adaptation:
-            * BULL: H_regime = 1.0%, all qualifying signals considered
-            * CHOP: H_regime = 0.40%, conviction >= 0.45 hurdle
+            * BULL: H_regime = 1.5%, all qualifying signals considered
+            * CHOP: H_regime = 0.90%, conviction >= 0.40 hurdle
             * BEAR: H_regime = 0.0% for longs (100% cash defense)
         """
         if portfolio_equity <= 0:
@@ -286,11 +288,19 @@ class PositionSizer:
 
         # 1. Determine regime heat capacity
         if regime == MarketRegime.CHOP:
-            regime_heat_cap = getattr(trading_config, "CHOP_RISK_HEAT_CEILING", 0.0040)
+            regime_heat_cap = getattr(trading_config, "CHOP_RISK_HEAT_CEILING", 0.0090)
         elif regime == MarketRegime.BEAR:
             regime_heat_cap = 0.0  # 100% cash defense for longs
         else:
-            regime_heat_cap = getattr(trading_config, "MAX_PORTFOLIO_HEAT_PCT", 0.010)
+            regime_heat_cap = getattr(trading_config, "MAX_PORTFOLIO_HEAT_PCT", 0.015)
+
+        # Distance-to-Cliff Governor:
+        # Scale regime_heat_cap dynamically based on remaining cushion to the 4.0% limit
+        dd_limit = getattr(trading_config, "CIRCUIT_BREAKER_DRAWDOWN_PCT", 0.04)
+        if current_drawdown > 0:
+            dd_fraction = min(1.0, max(0.0, current_drawdown / dd_limit))
+            headroom_mult = max(0.10, (1.0 - dd_fraction) ** 1.8)
+            regime_heat_cap *= headroom_mult
 
         # 2. Extract active open risk heat
         open_heat = 0.0
@@ -417,7 +427,7 @@ class PositionSizer:
                 )
                 continue
 
-            if regime == MarketRegime.CHOP and sig.conviction < 0.45:
+            if regime == MarketRegime.CHOP and sig.conviction < 0.40:
                 results[pair] = OrderSizeResult(
                     allowed=False,
                     pair=pair,
@@ -426,7 +436,7 @@ class PositionSizer:
                     collateral=0.0,
                     estimated_capital=0.0,
                     risk_usd=0.0,
-                    reason=f"Conviction ({sig.conviction:.2f}) below CHOP threshold (0.45)",
+                    reason=f"Conviction ({sig.conviction:.2f}) below CHOP threshold (0.40)",
                 )
                 continue
 
@@ -587,3 +597,107 @@ class PositionSizer:
                 )
 
         return [results[s.pair] for s in signals]
+
+    def validate_pyramid_order(
+        self,
+        pair: str,
+        action: SignalAction,
+        added_quantity: float,
+        current_price: float,
+        proposed_stop: float,
+        portfolio_equity: float,
+        free_usd: float,
+        current_position_capital: float,
+    ) -> OrderSizeResult:
+        """
+        Validate and size a pyramid / scale-in tranche for an existing winning position.
+        Strictly enforces:
+        - Free cash reserve invariant (free_usd >= MIN_CASH_BUFFER_PCT * equity)
+        - Max coin capital allocation (pos_capital + added_capital <= MAX_ALLOCATION_PER_COIN_PCT * equity)
+        - Precision rounding and $10 minimum order size
+        """
+        if portfolio_equity <= 0 or current_price <= 0:
+            return OrderSizeResult(
+                allowed=False,
+                pair=pair,
+                action=action,
+                quantity=0.0,
+                collateral=0.0,
+                estimated_capital=0.0,
+                risk_usd=0.0,
+                reason="Non-positive equity or price",
+            )
+
+        # 1. Cash buffer check
+        min_cash_required = portfolio_equity * trading_config.MIN_CASH_BUFFER_PCT
+        available_trading_cash = free_usd - min_cash_required
+        if available_trading_cash <= 10.0:
+            return OrderSizeResult(
+                allowed=False,
+                pair=pair,
+                action=action,
+                quantity=0.0,
+                collateral=0.0,
+                estimated_capital=0.0,
+                risk_usd=0.0,
+                reason=f"Insufficient free cash ({free_usd:.2f} USD) to maintain cash reserve ({min_cash_required:.2f} USD)",
+            )
+
+        # 2. Maximum allocation per coin limit
+        max_capital_per_coin = portfolio_equity * trading_config.MAX_ALLOCATION_PER_COIN_PCT
+        headroom = max_capital_per_coin - current_position_capital
+        if headroom <= 10.0:
+            return OrderSizeResult(
+                allowed=False,
+                pair=pair,
+                action=action,
+                quantity=0.0,
+                collateral=0.0,
+                estimated_capital=0.0,
+                risk_usd=0.0,
+                reason=f"Coin allocation limit reached ({current_position_capital:.2f} USD >= {max_capital_per_coin:.2f} USD)",
+            )
+
+        # 3. Capital clamp
+        raw_capital = added_quantity * current_price
+        capped_capital = min(raw_capital, available_trading_cash, headroom)
+        raw_qty = capped_capital / current_price
+
+        # 4. Precision rounding clamped strictly to available cash & headroom
+        precision = self.precisions.get(pair, 2)
+        step = 10.0 ** (-precision)
+        final_quantity = round(raw_qty, precision)
+        while (final_quantity * current_price > available_trading_cash or final_quantity * current_price > headroom) and final_quantity >= step:
+            final_quantity = round(final_quantity - step, precision)
+        final_capital = final_quantity * current_price
+
+        if final_capital < 10.0:
+            return OrderSizeResult(
+                allowed=False,
+                pair=pair,
+                action=action,
+                quantity=0.0,
+                collateral=0.0,
+                estimated_capital=0.0,
+                risk_usd=0.0,
+                reason=f"Pyramid tranche size too small ({final_capital:.2f} USD < $10 minimum)",
+            )
+
+        # 5. Risk calculation
+        stop_dist = abs(current_price - proposed_stop)
+        actual_risk_usd = final_quantity * stop_dist
+
+        is_buy = action == SignalAction.BUY
+        return OrderSizeResult(
+            allowed=True,
+            pair=pair,
+            action=action,
+            quantity=final_quantity,
+            collateral=round(final_capital, 2) if not is_buy else 0.0,
+            estimated_capital=round(final_capital, 2),
+            risk_usd=round(actual_risk_usd, 2),
+            reason=f"Pyramid tranche approved (+{final_quantity} {pair} | ${final_capital:.2f})",
+            entry_price=current_price,
+            stop_loss_price=proposed_stop,
+        )
+

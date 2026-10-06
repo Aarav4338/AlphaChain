@@ -1,11 +1,11 @@
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 from client.roostoo_client import RoostooClient
 from data.candle_manager import CandleManager
 from strategy.signals import TradeSignal, SignalAction
 from risk.position_sizer import PositionSizer, OrderSizeResult
-from risk.stop_loss_manager import StopLossManager, ExitSignal
+from risk.stop_loss_manager import StopLossManager, ExitSignal, PyramidCandidate
 from storage.db import Database
 
 logger = logging.getLogger("AlphaChain.OrderRouter")
@@ -168,6 +168,119 @@ class OrderRouter:
             else:
                 err = res.get("ErrMsg") if res else "No response"
                 logger.error(f"Failed to execute SHORT_OPEN for {pair}: {err}")
+                return False
+
+        return False
+
+    def execute_pyramid_scale_in(
+        self,
+        candidate: Any,
+        current_price: float,
+        size_res: Any,
+    ) -> bool:
+        """
+        Execute scale-in / pyramiding order on an existing winning position.
+        Updates in-memory position state and SQLite database.
+        """
+        pair = candidate.pair
+        pos = self.stop_loss_manager.positions.get(pair)
+        if not pos:
+            return False
+
+        if candidate.side == SignalAction.BUY:
+            logger.info(f"Pyramiding BUY into {pair}: Qty={size_res.quantity} @ ~${current_price:.4f}")
+            res = self.client.place_order(
+                pair=pair,
+                side="BUY",
+                quantity=size_res.quantity,
+                price=None,
+                order_type="MARKET",
+            )
+            if res and res.get("Success", False):
+                order_detail = res.get("OrderDetail", {})
+                filled_price = order_detail.get("Price", current_price)
+                order_id = str(order_detail.get("OrderID", ""))
+                fee = order_detail.get("CommissionChargeValue", 0.0)
+
+                self.stop_loss_manager.add_pyramid_tranche(
+                    pair=pair,
+                    added_qty=size_res.quantity,
+                    fill_price=filled_price,
+                    new_stop_loss=size_res.stop_loss_price,
+                )
+                self.db.log_trade(
+                    pair=pair,
+                    side="BUY_PYRAMID",
+                    order_type="MARKET",
+                    price=filled_price,
+                    quantity=size_res.quantity,
+                    fee=fee,
+                    order_id=order_id,
+                    reason=candidate.reason,
+                )
+                self.db.save_active_position(
+                    pair=pair,
+                    side="BUY",
+                    entry_price=pos.entry_price,
+                    quantity=pos.quantity,
+                    collateral=0.0,
+                    stop_loss=pos.stop_loss,
+                    take_profit=pos.take_profit,
+                    atr=pos.atr,
+                    highest_price=pos.highest_price,
+                    lowest_price=pos.lowest_price,
+                )
+                logger.info(f"Pyramid scale-in filled for {pair} @ {filled_price:.4f} (Order #{order_id})")
+                return True
+            else:
+                err = res.get("ErrMsg") if res else "No response"
+                logger.error(f"Failed to execute pyramid BUY for {pair}: {err}")
+                return False
+
+        elif candidate.side == SignalAction.SHORT_OPEN:
+            logger.info(f"Pyramiding SHORT into {pair}: Collateral=${size_res.collateral:.2f} USD")
+            res = self.client.short_open(pair=pair, collateral=size_res.collateral)
+            if res and res.get("Success", False):
+                filled_price = res.get("EntryPrice", current_price)
+                short_id = str(res.get("ID", ""))
+                short_qty = res.get("ShortQty", size_res.quantity)
+                fee = res.get("OpenFee", 0.0)
+
+                self.stop_loss_manager.add_pyramid_tranche(
+                    pair=pair,
+                    added_qty=short_qty,
+                    fill_price=filled_price,
+                    added_collateral=size_res.collateral,
+                    new_stop_loss=size_res.stop_loss_price,
+                )
+                self.db.log_trade(
+                    pair=pair,
+                    side="SHORT_PYRAMID",
+                    order_type="MARKET",
+                    price=filled_price,
+                    quantity=short_qty,
+                    collateral=size_res.collateral,
+                    fee=fee,
+                    order_id=short_id,
+                    reason=candidate.reason,
+                )
+                self.db.save_active_position(
+                    pair=pair,
+                    side="SHORT_OPEN",
+                    entry_price=pos.entry_price,
+                    quantity=pos.quantity,
+                    collateral=pos.collateral,
+                    stop_loss=pos.stop_loss,
+                    take_profit=pos.take_profit,
+                    atr=pos.atr,
+                    highest_price=pos.highest_price,
+                    lowest_price=pos.lowest_price,
+                )
+                logger.info(f"Pyramid SHORT filled for {pair} @ {filled_price:.4f} (Short #{short_id})")
+                return True
+            else:
+                err = res.get("ErrMsg") if res else "No response"
+                logger.error(f"Failed to execute pyramid SHORT for {pair}: {err}")
                 return False
 
         return False

@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 import logging
+import json
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
@@ -44,7 +46,26 @@ class CryptoLinearFactorModel:
         self.last_exit_times: Dict[str, int] = {}
         self.consecutive_losses: Dict[str, int] = {}
         self.diagnostics = LinearModelDiagnostics()
-        self.cached_weights: np.ndarray = np.array([0.35, 0.30, -0.15, 0.20])
+        
+        # Load calibrated factor weights from profile if available
+        profile_file = Path(__file__).resolve().parent.parent / "config" / "calibrated_optimal_profile.json"
+        if profile_file.exists():
+            try:
+                with open(profile_file, "r", encoding="utf-8") as f:
+                    prof_data = json.load(f)
+                fw = prof_data.get("factor_weights", {})
+                self.cached_weights = np.array([
+                    fw.get("lead_lag", 0.3311),
+                    fw.get("idio_mom", 0.4580),
+                    fw.get("reversal", 0.3036),
+                    fw.get("vol_flow", -0.6562),
+                ])
+                if "cost_hurdle" in prof_data:
+                    self.cost_hurdle = float(prof_data["cost_hurdle"])
+            except Exception:
+                self.cached_weights = np.array([0.3311, 0.4580, 0.3036, -0.6562])
+        else:
+            self.cached_weights = np.array([0.3311, 0.4580, 0.3036, -0.6562])
 
     def compute_factors_for_pair(
         self,

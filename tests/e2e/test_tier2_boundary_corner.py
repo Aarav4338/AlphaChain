@@ -248,7 +248,7 @@ class TestBoundary3MaxUniverseScaleTwelveAssets:
         equity = 100000.0
         free_usd = 85000.0
 
-        universe = trading_config.ASSET_UNIVERSE
+        universe = getattr(trading_config, "ASSET_UNIVERSE_12", trading_config.ASSET_UNIVERSE[:12])
         assert len(universe) == 12
 
         signals = [
@@ -278,7 +278,7 @@ class TestBoundary3MaxUniverseScaleTwelveAssets:
         equity = 100000.0
         free_usd = 85000.0
 
-        universe = trading_config.ASSET_UNIVERSE
+        universe = getattr(trading_config, "ASSET_UNIVERSE_12", trading_config.ASSET_UNIVERSE[:12])
         signals = [
             signal_factory(pair, SignalAction.BUY, entry_price=100.0, conviction=round(0.1 + i * 0.08, 2))
             for i, pair in enumerate(universe)
@@ -305,7 +305,7 @@ class TestBoundary3MaxUniverseScaleTwelveAssets:
         equity = 100000.0
         free_usd = 85000.0
 
-        universe = trading_config.ASSET_UNIVERSE
+        universe = getattr(trading_config, "ASSET_UNIVERSE_12", trading_config.ASSET_UNIVERSE[:12])
         # Very tight stops to force capital limits
         signals = [
             signal_factory(pair, SignalAction.BUY, entry_price=100.0, stop_dist_pct=0.005, conviction=0.90)
@@ -329,7 +329,7 @@ class TestBoundary3MaxUniverseScaleTwelveAssets:
         equity = 100000.0
         free_usd = 32000.0
 
-        universe = trading_config.ASSET_UNIVERSE
+        universe = getattr(trading_config, "ASSET_UNIVERSE_12", trading_config.ASSET_UNIVERSE[:12])
         signals = [
             signal_factory(pair, SignalAction.BUY, entry_price=100.0, conviction=0.80)
             for pair in universe
@@ -353,7 +353,7 @@ class TestBoundary3MaxUniverseScaleTwelveAssets:
         equity = 100000.0
         free_usd = 80000.0
 
-        universe = trading_config.ASSET_UNIVERSE
+        universe = getattr(trading_config, "ASSET_UNIVERSE_12", trading_config.ASSET_UNIVERSE[:12])
         signals = [
             signal_factory(pair, SignalAction.BUY, entry_price=50.0, conviction=0.85)
             for pair in universe

@@ -4,20 +4,53 @@ from typing import List
 
 @dataclass
 class TradingConfig:
+    ASSET_UNIVERSE_12: List[str] = field(
+        default_factory=lambda: [
+            "BTC/USD", "ETH/USD", "SOL/USD", "BNB/USD", "XRP/USD", "DOGE/USD",
+            "ADA/USD", "AVAX/USD", "LINK/USD", "NEAR/USD", "SUI/USD", "APT/USD",
+        ]
+    )
+
+    ASSET_UNIVERSE_44: List[str] = field(
+        default_factory=lambda: [
+            # 1. Mega-Cap Benchmarks & Majors (12)
+            "BTC/USD", "ETH/USD", "SOL/USD", "BNB/USD", "XRP/USD", "DOGE/USD",
+            "ADA/USD", "AVAX/USD", "LINK/USD", "NEAR/USD", "SUI/USD", "APT/USD",
+
+            # 2. Top Liquid US Tech & Crypto-Proxy Stocks (9)
+            "NVDAB/USD",  # Nvidia (AI sector momentum)
+            "TSLAB/USD",  # Tesla (High retail volatility)
+            "MSTRB/USD",  # MicroStrategy (BTC treasury proxy)
+            "COINB/USD",  # Coinbase (Crypto exchange proxy)
+            "PLTRB/USD",  # Palantir (Enterprise AI)
+            "AMDB/USD",   # AMD (Semiconductors)
+            "GOOGLB/USD", # Google (Tech benchmark)
+            "METAB/USD",  # Meta (Social & AI)
+            "MSFTB/USD",  # Microsoft (Tech benchmark)
+
+            # 3. High-Momentum DeFi, L1/L2 & AI Altcoins (23)
+            "AAVE/USD", "ARB/USD", "BONK/USD", "CRV/USD", "DOT/USD", "ENA/USD",
+            "FET/USD", "FIL/USD", "ICP/USD", "LTC/USD", "ONDO/USD", "PENDLE/USD",
+            "PEPE/USD", "POL/USD", "SEI/USD", "SHIB/USD", "TAO/USD", "TON/USD",
+            "TRX/USD", "UNI/USD", "WIF/USD", "WLD/USD", "XLM/USD",
+        ]
+    )
+
     ASSET_UNIVERSE: List[str] = field(
         default_factory=lambda: [
-            "BTC/USD",
-            "ETH/USD",
-            "SOL/USD",
-            "BNB/USD",
-            "XRP/USD",
-            "DOGE/USD",
-            "ADA/USD",
-            "AVAX/USD",
-            "LINK/USD",
-            "NEAR/USD",
-            "SUI/USD",
-            "APT/USD",
+            # 1. Mega-Cap Benchmarks & Majors (12)
+            "BTC/USD", "ETH/USD", "SOL/USD", "BNB/USD", "XRP/USD", "DOGE/USD",
+            "ADA/USD", "AVAX/USD", "LINK/USD", "NEAR/USD", "SUI/USD", "APT/USD",
+
+            # 2. Top Liquid US Tech & Crypto-Proxy Stocks (9)
+            "NVDAB/USD", "TSLAB/USD", "MSTRB/USD", "COINB/USD", "PLTRB/USD",
+            "AMDB/USD", "GOOGLB/USD", "METAB/USD", "MSFTB/USD",
+
+            # 3. High-Momentum DeFi, L1/L2 & AI Altcoins (23)
+            "AAVE/USD", "ARB/USD", "BONK/USD", "CRV/USD", "DOT/USD", "ENA/USD",
+            "FET/USD", "FIL/USD", "ICP/USD", "LTC/USD", "ONDO/USD", "PENDLE/USD",
+            "PEPE/USD", "POL/USD", "SEI/USD", "SHIB/USD", "TAO/USD", "TON/USD",
+            "TRX/USD", "UNI/USD", "WIF/USD", "WLD/USD", "XLM/USD",
         ]
     )
 
@@ -55,6 +88,12 @@ class TradingConfig:
     TRAILING_DISTANCE_ATR_MULT: float = 1.8
     MAX_HOLDING_BARS: int = 0
 
+    # Trend Pyramiding / Scale-In on Winners
+    PYRAMIDING_ENABLED: bool = False
+    PYRAMIDING_PROFIT_ATR_MULT: float = 1.5
+    PYRAMIDING_TRANCHE_SCALE: float = 0.50
+    MAX_PYRAMID_TRANCHES: int = 1
+
     CIRCUIT_BREAKER_DRAWDOWN_PCT: float = 0.04
     CIRCUIT_BREAKER_COOLDOWN_HOURS: int = 12
 
@@ -65,6 +104,74 @@ class TradingConfig:
 
     MAIN_LOOP_SLEEP_SECONDS: int = 30
     EQUITY_SNAPSHOT_INTERVAL_SECONDS: int = 3600
+
+    def apply_profile(self, profile: str = "active_dynamic") -> None:
+        """Apply pre-calibrated parameter profiles for dynamic active vs baseline sniper trading."""
+        if profile == "active_dynamic":
+            self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_44.copy()
+            self.ADX_TREND_THRESHOLD = 18.0
+            self.MAX_PORTFOLIO_HEAT_PCT = 0.015
+            self.MAX_RISK_PER_ASSET_PCT = 0.0065
+            self.CHOP_RISK_HEAT_CEILING = 0.0090
+            self.MAX_ALLOCATION_PER_COIN_PCT = 0.30
+            self.MIN_CASH_BUFFER_PCT = 0.15
+            self.MAX_HOLDING_BARS = 24  # 6-hour rotation decay for stagnant positions
+            self.TAKE_PROFIT_ATR_MULT = 3.5
+            self.PYRAMIDING_ENABLED = False
+        elif profile == "calibrated_optimal":
+            self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_44.copy()
+            self.ADX_TREND_THRESHOLD = 23.11
+            self.MAX_PORTFOLIO_HEAT_PCT = 0.0150
+            self.MAX_RISK_PER_ASSET_PCT = 0.0065
+            self.CHOP_RISK_HEAT_CEILING = 0.0090
+            self.MAX_ALLOCATION_PER_COIN_PCT = 0.25
+            self.MIN_CASH_BUFFER_PCT = 0.15
+            self.STOP_LOSS_ATR_MULT = 1.83
+            self.TAKE_PROFIT_ATR_MULT = 1.89
+            self.BREAKEVEN_ACTIVATION_ATR_MULT = 1.25
+            self.MAX_HOLDING_BARS = 24
+            self.PYRAMIDING_ENABLED = False
+        elif profile == "pyramiding_optimal":
+            self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_44.copy()
+            self.ADX_TREND_THRESHOLD = 23.11
+            self.MAX_PORTFOLIO_HEAT_PCT = 0.0150
+            self.MAX_RISK_PER_ASSET_PCT = 0.0065
+            self.CHOP_RISK_HEAT_CEILING = 0.0090
+            self.MAX_ALLOCATION_PER_COIN_PCT = 0.30  # Allows capital room for winning pyramid additions
+            self.MIN_CASH_BUFFER_PCT = 0.15
+            self.STOP_LOSS_ATR_MULT = 1.83
+            self.TAKE_PROFIT_ATR_MULT = 2.50         # Extended target to allow winners with scale-ins to run
+            self.BREAKEVEN_ACTIVATION_ATR_MULT = 1.25
+            self.MAX_HOLDING_BARS = 32               # Extended horizon for trending winners
+            self.PYRAMIDING_ENABLED = True
+            self.PYRAMIDING_PROFIT_ATR_MULT = 1.5
+            self.PYRAMIDING_TRANCHE_SCALE = 0.50
+            self.MAX_PYRAMID_TRANCHES = 1
+        elif profile == "baseline_sniper":
+            self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_12.copy()
+            self.ADX_TREND_THRESHOLD = 23.0
+            self.MAX_PORTFOLIO_HEAT_PCT = 0.010
+            self.MAX_RISK_PER_ASSET_PCT = 0.0050
+            self.CHOP_RISK_HEAT_CEILING = 0.0040
+            self.MAX_ALLOCATION_PER_COIN_PCT = 0.20
+            self.MIN_CASH_BUFFER_PCT = 0.25
+            self.STOP_LOSS_ATR_MULT = 1.5
+            self.TAKE_PROFIT_ATR_MULT = 4.0
+            self.BREAKEVEN_ACTIVATION_ATR_MULT = 1.2
+            self.MAX_HOLDING_BARS = 0
+            self.PYRAMIDING_ENABLED = False
+
+    def reset_defaults(self) -> None:
+        """Reset all parameters to default baseline configuration."""
+        self.apply_profile("baseline_sniper")
+        self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_12.copy()
+        self.DYNAMIC_CONCURRENCY_ENABLED = True
+        self.TRAILING_ACTIVATION_ATR_MULT = 2.0
+        self.TRAILING_DISTANCE_ATR_MULT = 1.8
+        self.MAX_CONCURRENT_POSITIONS = 3
+        self.PYRAMIDING_PROFIT_ATR_MULT = 1.5
+        self.PYRAMIDING_TRANCHE_SCALE = 0.50
+        self.MAX_PYRAMID_TRANCHES = 1
 
 
 trading_config = TradingConfig()

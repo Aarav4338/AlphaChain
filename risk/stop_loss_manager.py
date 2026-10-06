@@ -5,6 +5,7 @@ Guarantees asymmetric upside while cutting losers early to protect the Sortino &
 """
 from dataclasses import dataclass
 import logging
+import time
 from typing import Dict, List, Optional
 
 from config.trading_config import trading_config
@@ -29,6 +30,22 @@ class TrackedPosition:
     trailing_activated: bool = False
     breakeven_activated: bool = False
     entry_bar: int = 0
+    entry_time: float = 0.0     # Epoch timestamp in seconds for wall-clock time barrier
+    scale_in_count: int = 0     # Number of pyramid additions executed
+    entry_time_str: str = ""    # Human readable entry time string for trade audit
+
+
+@dataclass
+class PyramidCandidate:
+    pair: str
+    side: SignalAction
+    current_price: float
+    added_quantity: float
+    estimated_cost: float
+    collateral: float
+    new_blended_entry: float
+    new_stop_loss: float
+    reason: str
 
 
 @dataclass
@@ -58,8 +75,10 @@ class StopLossManager:
         take_profit: float,
         atr: float,
         entry_bar: int = 0,
+        entry_time: float = 0.0,
     ) -> None:
         """Register a newly opened position for tracking."""
+        pos_entry_time = entry_time if entry_time > 0.0 else time.time()
         self.positions[pair] = TrackedPosition(
             pair=pair,
             side=side,
@@ -75,6 +94,7 @@ class StopLossManager:
             trailing_activated=False,
             breakeven_activated=False,
             entry_bar=entry_bar,
+            entry_time=pos_entry_time,
         )
         logger.info(
             f"Tracking new position: {pair} ({side.value}) @ {entry_price:.4f} | "
@@ -110,19 +130,37 @@ class StopLossManager:
         # 1. TIME-HORIZON BARRIER (Max Holding Duration Check)
         # ----------------------------------------------------------------------
         max_bars = getattr(trading_config, "MAX_HOLDING_BARS", 0)
-        if max_bars > 0 and current_bar is not None and pos.entry_bar > 0:
-            holding_bars = current_bar - pos.entry_bar
-            if holding_bars >= max_bars:
+        if max_bars > 0:
+            # Wall-clock duration check (for live trading daemon)
+            max_seconds = max_bars * 15 * 60  # e.g. 24 bars * 900s = 6.0 hours
+            now_sec = time.time()
+            if pos.entry_time > 0.0 and (now_sec - pos.entry_time) >= max_seconds:
+                elapsed_hrs = (now_sec - pos.entry_time) / 3600.0
                 action = SignalAction.SELL if pos.side == SignalAction.BUY else SignalAction.SHORT_CLOSE
-                logger.info(f"⏳ Time Horizon Barrier reached for {pair} after {holding_bars} bars.")
+                logger.info(f"⏳ Time Horizon Barrier reached for {pair} after {elapsed_hrs:.1f} hours.")
                 return ExitSignal(
                     pair=pair,
                     action=action,
                     quantity=pos.quantity,
                     collateral=pos.collateral if pos.side == SignalAction.SHORT_OPEN else 0.0,
                     order_type="MARKET",
-                    reason=f"Time Horizon Barrier ({holding_bars} bars)",
+                    reason=f"Time Horizon Barrier ({elapsed_hrs:.1f}h)",
                 )
+
+            # Bar-based index check (for historical backtest simulations)
+            if current_bar is not None and pos.entry_bar > 0:
+                holding_bars = current_bar - pos.entry_bar
+                if holding_bars >= max_bars:
+                    action = SignalAction.SELL if pos.side == SignalAction.BUY else SignalAction.SHORT_CLOSE
+                    logger.info(f"⏳ Time Horizon Barrier reached for {pair} after {holding_bars} bars.")
+                    return ExitSignal(
+                        pair=pair,
+                        action=action,
+                        quantity=pos.quantity,
+                        collateral=pos.collateral if pos.side == SignalAction.SHORT_OPEN else 0.0,
+                        order_type="MARKET",
+                        reason=f"Time Horizon Barrier ({holding_bars} bars)",
+                    )
 
         # ----------------------------------------------------------------------
         # 2. LONG POSITION LOGIC
@@ -274,3 +312,137 @@ class StopLossManager:
                 total_downside_risk_usd += pos.quantity * downside_per_unit
 
         return total_downside_risk_usd / portfolio_equity
+
+    def check_pyramid_eligibility(
+        self,
+        pair: str,
+        current_price: float,
+        current_atr: Optional[float] = None,
+    ) -> Optional[PyramidCandidate]:
+        """
+        Check if an active position qualifies for trend scale-in / pyramiding.
+        Guarantees:
+        1. Pyramiding is globally enabled.
+        2. Position has not reached MAX_PYRAMID_TRANCHES.
+        3. Position is significantly in profit (profit >= PYRAMIDING_PROFIT_ATR_MULT * ATR).
+        4. Breakeven or trailing stop is already active (Tranche 1 is risk-free).
+        """
+        if not getattr(trading_config, "PYRAMIDING_ENABLED", False):
+            return None
+
+        pos = self.positions.get(pair)
+        if pos is None:
+            return None
+
+        max_tranches = getattr(trading_config, "MAX_PYRAMID_TRANCHES", 1)
+        if pos.scale_in_count >= max_tranches:
+            return None
+
+        # Position must have locked in breakeven or trailing stop (Tranche 1 is risk-free)
+        if not pos.breakeven_activated and not pos.trailing_activated:
+            return None
+
+        safe_atr = max(current_atr or pos.atr, 1e-6)
+        profit_atr_mult = getattr(trading_config, "PYRAMIDING_PROFIT_ATR_MULT", 1.5)
+        tranche_scale = getattr(trading_config, "PYRAMIDING_TRANCHE_SCALE", 0.50)
+
+        # Long check
+        if pos.side == SignalAction.BUY:
+            profit_atr = (current_price - pos.entry_price) / safe_atr
+            if profit_atr < profit_atr_mult:
+                return None
+
+            added_qty = pos.quantity * tranche_scale
+            total_qty = pos.quantity + added_qty
+            blended_entry = (pos.quantity * pos.entry_price + added_qty * current_price) / total_qty
+            # Protect blended entry: ratchet stop to at least pos.stop_loss or (blended_entry - 0.5 * ATR)
+            new_stop = max(pos.stop_loss, blended_entry - 0.5 * safe_atr)
+            estimated_cost = added_qty * current_price
+
+            return PyramidCandidate(
+                pair=pair,
+                side=pos.side,
+                current_price=current_price,
+                added_quantity=added_qty,
+                estimated_cost=estimated_cost,
+                collateral=0.0,
+                new_blended_entry=blended_entry,
+                new_stop_loss=new_stop,
+                reason=f"Pyramid Scale-In (+{profit_atr:.2f} ATR trend continuation)",
+            )
+
+        # Short check
+        elif pos.side == SignalAction.SHORT_OPEN:
+            profit_atr = (pos.entry_price - current_price) / safe_atr
+            if profit_atr < profit_atr_mult:
+                return None
+
+            added_qty = pos.quantity * tranche_scale
+            total_qty = pos.quantity + added_qty
+            blended_entry = (pos.quantity * pos.entry_price + added_qty * current_price) / total_qty
+            new_stop = min(pos.stop_loss, blended_entry + 0.5 * safe_atr)
+            estimated_cost = added_qty * current_price
+
+            return PyramidCandidate(
+                pair=pair,
+                side=pos.side,
+                current_price=current_price,
+                added_quantity=added_qty,
+                estimated_cost=estimated_cost,
+                collateral=estimated_cost,
+                new_blended_entry=blended_entry,
+                new_stop_loss=new_stop,
+                reason=f"Pyramid Scale-In (+{profit_atr:.2f} ATR short continuation)",
+            )
+
+        return None
+
+    def add_pyramid_tranche(
+        self,
+        pair: str,
+        added_qty: float,
+        fill_price: float,
+        added_collateral: float = 0.0,
+        new_stop_loss: Optional[float] = None,
+    ) -> bool:
+        """
+        Incorporate a filled pyramid tranche into an active position.
+        Recalculates blended entry price, expands quantity, updates stop-loss, and increments scale_in_count.
+        """
+        pos = self.positions.get(pair)
+        if pos is None:
+            return False
+
+        old_qty = pos.quantity
+        new_qty = old_qty + added_qty
+        if new_qty <= 0:
+            return False
+
+        blended_entry = (old_qty * pos.entry_price + added_qty * fill_price) / new_qty
+        pos.entry_price = blended_entry
+        pos.quantity = new_qty
+        pos.scale_in_count += 1
+
+        if pos.side == SignalAction.SHORT_OPEN:
+            pos.collateral += added_collateral
+
+        if new_stop_loss is not None:
+            if pos.side == SignalAction.BUY:
+                pos.stop_loss = max(pos.stop_loss, new_stop_loss)
+            else:
+                pos.stop_loss = min(pos.stop_loss, new_stop_loss)
+
+        # Update take profit target based on new blended entry
+        tp_mult = getattr(trading_config, "TAKE_PROFIT_ATR_MULT", 2.5)
+        if pos.side == SignalAction.BUY:
+            pos.take_profit = pos.entry_price + (tp_mult * pos.atr)
+        else:
+            pos.take_profit = pos.entry_price - (tp_mult * pos.atr)
+
+        logger.info(
+            f"Pyramided into {pair} (+{added_qty:.4f} @ {fill_price:.4f}) | "
+            f"New Total Qty: {pos.quantity:.4f} | Blended Entry: {pos.entry_price:.4f} | "
+            f"New Stop: {pos.stop_loss:.4f} | New Target: {pos.take_profit:.4f} | "
+            f"Tranches: {pos.scale_in_count}"
+        )
+        return True

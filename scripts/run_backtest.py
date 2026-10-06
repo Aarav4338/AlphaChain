@@ -242,6 +242,39 @@ class BacktestEngine:
                     strategy.record_exit(pair, t_idx, net_pnl=net_pnl)
                 circuit_breaker.acknowledge_liquidation()
 
+            # 4.5. Look for Pyramiding / Scale-In Opportunities on Winning Positions
+            if getattr(trading_config, "PYRAMIDING_ENABLED", False) and circuit_breaker.is_trading_allowed():
+                for pair in list(stop_loss_manager.positions.keys()):
+                    pos = stop_loss_manager.positions.get(pair)
+                    if not pos:
+                        continue
+                    curr_p = candle_manager.get_latest_price(pair) or pos.entry_price
+                    candidate = stop_loss_manager.check_pyramid_eligibility(pair, curr_p)
+                    if candidate:
+                        current_pos_cap = pos.quantity * curr_p if pos.side == SignalAction.BUY else pos.collateral
+                        size_res = sizer.validate_pyramid_order(
+                            pair=pair,
+                            action=pos.side,
+                            added_quantity=candidate.added_quantity,
+                            current_price=curr_p,
+                            proposed_stop=candidate.new_stop_loss,
+                            portfolio_equity=equity,
+                            free_usd=free_usd,
+                            current_position_capital=current_pos_cap,
+                        )
+                        if size_res.allowed:
+                            cost = size_res.estimated_capital
+                            fee = cost * self.fee_rate
+                            if free_usd >= (cost + fee):
+                                free_usd -= (cost + fee)
+                                stop_loss_manager.add_pyramid_tranche(
+                                    pair=pair,
+                                    added_qty=size_res.quantity,
+                                    fill_price=curr_p,
+                                    added_collateral=size_res.collateral if pos.side == SignalAction.SHORT_OPEN else 0.0,
+                                    new_stop_loss=size_res.stop_loss_price,
+                                )
+
             # 5. Look for New Entries
             if circuit_breaker.is_trading_allowed():
                 signals = strategy.generate_signals(
@@ -256,12 +289,14 @@ class BacktestEngine:
                         # Dynamic portfolio concurrency & risk heat partitioning
                         regime_res = regime_detector.detect_regime(candle_manager)
                         current_heat = stop_loss_manager.get_portfolio_risk_heat(equity)
+                        current_dd = circuit_breaker.current_drawdown_pct
                         sized_orders = sizer.calculate_dynamic_portfolio_sizes(
                             signals=signals,
                             portfolio_equity=equity,
                             free_usd=free_usd,
                             current_open_risk_heat=current_heat,
                             regime=regime_res.regime,
+                            current_drawdown=current_dd,
                         )
 
                         for order in sized_orders:
@@ -425,9 +460,22 @@ class BacktestEngine:
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="CarrotQuant Strategy Backtester & Performance Analyzer")
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default="calibrated_optimal",
+        choices=["baseline_sniper", "calibrated_optimal", "pyramiding_optimal", "active_dynamic"],
+        help="Trading strategy configuration profile to simulate",
+    )
+    args = parser.parse_args()
+
     print("=" * 70)
     print("🥕 CarrotQuant Strategy Backtester & Performance Analyzer")
     print("=" * 70)
+    trading_config.apply_profile(args.profile)
+    print(f"⚡ Profile: {args.profile.upper()} (Pyramiding Enabled: {trading_config.PYRAMIDING_ENABLED})")
 
     engine = BacktestEngine(
         pairs=[

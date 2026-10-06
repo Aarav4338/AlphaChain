@@ -60,6 +60,17 @@ class StateReconciler:
         # 3. Load locally saved positions from SQLite
         saved_positions = {p["pair"]: p for p in self.db.get_active_positions()} if self.db is not None else {}
 
+        # 4. Fetch matched orders from Roostoo to extract exact historical entry timestamps
+        orders_res = self.client.query_order()
+        matched_orders = orders_res.get("OrderMatched", []) if orders_res and orders_res.get("Success", False) else []
+        order_fill_times: Dict[str, float] = {}
+        for o in matched_orders:
+            p = o.get("Pair")
+            if p and o.get("Status") == "FILLED":
+                cts = o.get("CreateTimestamp")
+                if cts and p not in order_fill_times:
+                    order_fill_times[p] = float(cts) / 1000.0
+
         # ----------------------------------------------------------------------
         # Reconcile Spot Long Holdings
         # ----------------------------------------------------------------------
@@ -88,6 +99,7 @@ class StateReconciler:
                     stop_p = float(saved["stop_loss"]) if saved else (last_price * 0.95)
                     take_p = float(saved["take_profit"]) if saved else (last_price * 1.10)
                     atr = float(saved["atr"]) if saved else (last_price * 0.03)
+                    pos_entry_time = order_fill_times.get(pair, 0.0)
 
                     self.stop_loss_manager.register_position(
                         pair=pair,
@@ -98,8 +110,9 @@ class StateReconciler:
                         stop_loss=stop_p,
                         take_profit=take_p,
                         atr=atr,
+                        entry_time=pos_entry_time,
                     )
-                    logger.info(f"Restored Long position for {pair}: {coin_qty} coins (Value: ${coin_value:.2f})")
+                    logger.info(f"Restored Long position for {pair}: {coin_qty} coins (Value: ${coin_value:.2f}, EntryTime: {pos_entry_time})")
 
         # ----------------------------------------------------------------------
         # Reconcile Spot Short Holdings
@@ -120,6 +133,7 @@ class StateReconciler:
                 stop_p = float(saved["stop_loss"]) if saved else (entry_p * 1.05)
                 take_p = float(saved["take_profit"]) if saved else (entry_p * 0.90)
                 atr = float(saved["atr"]) if saved else (entry_p * 0.03)
+                pos_entry_time = order_fill_times.get(pair, 0.0)
 
                 self.stop_loss_manager.register_position(
                     pair=pair,
@@ -130,6 +144,7 @@ class StateReconciler:
                     stop_loss=stop_p,
                     take_profit=take_p,
                     atr=atr,
+                    entry_time=pos_entry_time,
                 )
                 logger.info(f"Restored Short position for {pair}: Collateral=${collateral:.2f}")
 

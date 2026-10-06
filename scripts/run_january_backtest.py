@@ -93,10 +93,12 @@ def fetch_binance_range(
     return df
 
 
-def run_january_validation():
+def run_january_validation(profile: str = "calibrated_optimal"):
     print("=" * 85)
     print("📅 CARROTQUANT OUT-OF-SAMPLE VALIDATION: JANUARY 15th TO JANUARY 30th")
     print("=" * 85)
+    trading_config.apply_profile(profile)
+    print(f"⚡ Active Profile: {profile.upper()} (Pyramiding Enabled: {trading_config.PYRAMIDING_ENABLED})")
 
     fetcher = BinanceFetcher()
     pairs = trading_config.ASSET_UNIVERSE
@@ -241,13 +243,47 @@ def run_january_validation():
                 strat.record_exit(p, t_idx, net_pnl=pnl)
             cb.acknowledge_liquidation()
 
+        # 4.5. Pyramiding / Scale-In on Winning Positions
+        if getattr(trading_config, "PYRAMIDING_ENABLED", False) and cb.is_trading_allowed():
+            for p in list(slm.positions.keys()):
+                pos = slm.positions.get(p)
+                if not pos:
+                    continue
+                curr_p = cm.get_latest_price(p) or pos.entry_price
+                candidate = slm.check_pyramid_eligibility(p, curr_p)
+                if candidate:
+                    current_pos_cap = pos.quantity * curr_p if pos.side == SignalAction.BUY else pos.collateral
+                    size_res = sizer.validate_pyramid_order(
+                        pair=p,
+                        action=pos.side,
+                        added_quantity=candidate.added_quantity,
+                        current_price=curr_p,
+                        proposed_stop=candidate.new_stop_loss,
+                        portfolio_equity=equity,
+                        free_usd=free_usd,
+                        current_position_capital=current_pos_cap,
+                    )
+                    if size_res.allowed:
+                        cost = size_res.estimated_capital
+                        fee = cost * fee_rate
+                        if free_usd >= (cost + fee):
+                            free_usd -= (cost + fee)
+                            slm.add_pyramid_tranche(
+                                pair=p,
+                                added_qty=size_res.quantity,
+                                fill_price=curr_p,
+                                added_collateral=size_res.collateral if pos.side == SignalAction.SHORT_OPEN else 0.0,
+                                new_stop_loss=size_res.stop_loss_price,
+                            )
+                            trading_days.add(str(ts)[:10])
+
         # 5. Entries
         if cb.is_trading_allowed():
             sigs = strat.generate_signals(cm, active_pairs=list(slm.positions.keys()), current_bar_index=t_idx)
             if sigs:
                 sigs.sort(key=lambda s: s.conviction, reverse=True)
                 if getattr(trading_config, "DYNAMIC_CONCURRENCY_ENABLED", True):
-                    reg_res = reg.detect_regime(cm)
+                    reg_res = regime_det.detect_regime(cm)
                     current_heat = slm.get_portfolio_risk_heat(equity)
                     sized_orders = sizer.calculate_dynamic_portfolio_sizes(
                         signals=sigs,
@@ -405,5 +441,15 @@ def run_january_validation():
 
 
 if __name__ == "__main__":
-    run_january_validation()
+    import argparse
+    parser = argparse.ArgumentParser(description="CarrotQuant January Out-of-Sample Backtester")
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default="calibrated_optimal",
+        choices=["baseline_sniper", "calibrated_optimal", "pyramiding_optimal", "active_dynamic"],
+        help="Trading strategy configuration profile",
+    )
+    args = parser.parse_args()
+    run_january_validation(profile=args.profile)
 

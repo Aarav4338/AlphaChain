@@ -217,8 +217,12 @@ class Database:
         INSERT INTO active_positions (pair, side, entry_price, quantity, collateral, stop_loss, take_profit, atr, highest_price, lowest_price, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(pair) DO UPDATE SET
+            entry_price = excluded.entry_price,
+            quantity = excluded.quantity,
+            collateral = excluded.collateral,
             stop_loss = excluded.stop_loss,
             take_profit = excluded.take_profit,
+            atr = excluded.atr,
             highest_price = excluded.highest_price,
             lowest_price = excluded.lowest_price;
         """

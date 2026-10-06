@@ -40,9 +40,9 @@ class MultiRegimeAlphaStrategy:
         self.candle_manager: CandleManager = candle_manager or RobustCandleManager()
         self.regime_detector: RegimeDetector = regime_detector or RegimeDetector()
         self.linear_model: CryptoLinearFactorModel = linear_model or CryptoLinearFactorModel(
-            cost_hurdle=0.0020,
+            cost_hurdle=0.0014,
             max_positions=trading_config.MAX_CONCURRENT_POSITIONS,
-            cooldown_bars=16,
+            cooldown_bars=12,
         )
 
     def generate_signals(
@@ -57,7 +57,7 @@ class MultiRegimeAlphaStrategy:
         btc_15 = cm.get_candles("BTC/USD", timeframe="15m")
         if btc_15 is not None and len(btc_15) >= 2:
             last_btc_ret = (btc_15["close"].iloc[-1] - btc_15["open"].iloc[-1]) / btc_15["open"].iloc[-1]
-            if last_btc_ret < -0.006:
+            if last_btc_ret < -0.008:
                 return []
 
         regime_result = self.regime_detector.detect_regime(cm, timeframe="1h")
@@ -78,14 +78,16 @@ class MultiRegimeAlphaStrategy:
                     # In BULL: pass all qualifying signals
                     filtered_signals.append(sig)
                 elif regime == MarketRegime.CHOP:
-                    # In CHOP: restrict to conviction >= 0.45
-                    if sig.conviction >= 0.45:
+                    # In CHOP: allow conviction >= 0.40
+                    if sig.conviction >= 0.40:
                         filtered_signals.append(sig)
                 elif regime == MarketRegime.BEAR:
                     # In BEAR: contract long exposure to 100% cash defense
                     continue
             elif sig.action == SignalAction.SHORT_OPEN:
-                if regime == MarketRegime.BEAR and sig.conviction >= 0.70:
+                if regime == MarketRegime.BEAR and sig.conviction >= 0.55:
+                    filtered_signals.append(sig)
+                elif regime == MarketRegime.CHOP and sig.conviction >= 0.45:
                     filtered_signals.append(sig)
 
         filtered_signals.sort(key=lambda s: s.conviction, reverse=True)

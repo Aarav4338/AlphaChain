@@ -42,7 +42,9 @@ class TradingDaemon:
             log_dir=settings.LOGS_DIR,
             log_level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
         )
-        self.logger.info("Initializing AlphaChain Autonomous Trading Daemon")
+        profile = os.getenv("TRADING_PROFILE", "pyramiding_optimal")
+        trading_config.apply_profile(profile)
+        self.logger.info(f"Initializing AlphaChain Autonomous Trading Daemon (Profile: {profile})")
 
         self.running = False
         self._setup_signal_handlers()
@@ -137,6 +139,7 @@ class TradingDaemon:
                 self._update_portfolio_valuation()
                 self._evaluate_circuit_breaker()
                 self._manage_active_positions()
+                self._evaluate_pyramid_scale_ins()
 
                 if self.circuit_breaker.is_trading_allowed():
                     self._evaluate_and_enter_trades()
@@ -215,11 +218,58 @@ class TradingDaemon:
             if last_p is None:
                 continue
 
-            exit_sig = self.stop_loss_manager.update_price(pair, last_p)
+            exit_sig = self.stop_loss_manager.update_price(pair, last_p, current_bar=self.iteration_count)
             if exit_sig:
                 success = self.order_router.execute_exit(exit_sig, current_price=last_p)
                 if success:
                     self.strategy.record_exit(pair, self.iteration_count)
+                    bal = self.client.get_balance()
+                    if bal and bal.get("Success", False):
+                        wallet = bal.get("SpotWallet") or bal.get("Wallet", {})
+                        self.free_usd = float(wallet.get("USD", {}).get("Free", self.free_usd))
+                        self.locked_usd = float(wallet.get("USD", {}).get("Lock", 0.0))
+
+    def _evaluate_pyramid_scale_ins(self) -> None:
+        """Evaluate existing winning positions for pyramiding / trend scale-in."""
+        if not getattr(trading_config, "PYRAMIDING_ENABLED", False):
+            return
+        if not self.circuit_breaker.is_trading_allowed():
+            return
+
+        for pair in list(self.stop_loss_manager.positions.keys()):
+            pos = self.stop_loss_manager.positions.get(pair)
+            if not pos:
+                continue
+            curr_p = self.candle_manager.get_latest_price(pair)
+            if not curr_p:
+                continue
+
+            candidate = self.stop_loss_manager.check_pyramid_eligibility(pair, curr_p)
+            if not candidate:
+                continue
+
+            current_pos_cap = pos.quantity * curr_p if pos.side == SignalAction.BUY else pos.collateral
+            size_res = self.sizer.validate_pyramid_order(
+                pair=pair,
+                action=pos.side,
+                added_quantity=candidate.added_quantity,
+                current_price=curr_p,
+                proposed_stop=candidate.new_stop_loss,
+                portfolio_equity=self.portfolio_equity,
+                free_usd=self.free_usd,
+                current_position_capital=current_pos_cap,
+            )
+            if size_res.allowed:
+                self.logger.info(
+                    f"Scale-In Triggered: {pair} (+{size_res.quantity} @ {curr_p:.4f}) | "
+                    f"New Stop: {candidate.new_stop_loss:.4f} | Reason: {candidate.reason}"
+                )
+                success = self.order_router.execute_pyramid_scale_in(
+                    candidate=candidate,
+                    current_price=curr_p,
+                    size_res=size_res,
+                )
+                if success:
                     bal = self.client.get_balance()
                     if bal and bal.get("Success", False):
                         wallet = bal.get("SpotWallet") or bal.get("Wallet", {})
@@ -241,6 +291,7 @@ class TradingDaemon:
 
         regime_res = self.regime_detector.detect_regime(self.candle_manager)
         current_heat = self.stop_loss_manager.get_portfolio_risk_heat(self.portfolio_equity)
+        current_dd = self.circuit_breaker.current_drawdown_pct
 
         sized_orders = self.sizer.calculate_dynamic_portfolio_sizes(
             signals=signals,
@@ -248,6 +299,7 @@ class TradingDaemon:
             free_usd=self.free_usd,
             current_open_risk_heat=current_heat,
             regime=regime_res.regime,
+            current_drawdown=current_dd,
         )
 
         for order in sized_orders:

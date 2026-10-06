@@ -18,6 +18,7 @@ REGION = "ap-southeast-2"
 LAUNCH_TEMPLATE_ID = "lt-0551233d212ccb731"
 INSTANCE_TAG = "AlphaChain-Trading-Daemon"
 REPO_URL = "https://github.com/Aarav4338/Carrotcuant.git"
+DEPLOY_BRANCH = os.getenv("DEPLOY_BRANCH", "main")
 
 def log(msg: str):
     print(f"[AWS-DEPLOY] {msg}", flush=True)
@@ -41,6 +42,8 @@ def get_env_content() -> str:
     has_mode = False
     for line in lines:
         stripped = line.strip()
+        if stripped.startswith("["):
+            continue
         if stripped.startswith("TRADING_MODE="):
             out_lines.append("TRADING_MODE=competition\n")
             has_mode = True
@@ -50,6 +53,7 @@ def get_env_content() -> str:
     if not has_mode:
         out_lines.append("TRADING_MODE=competition\n")
 
+    out_lines.append("TRADING_PROFILE=pyramiding_optimal\n")
     return "".join(out_lines)
 
 def build_user_data_script(env_content: str) -> str:
@@ -81,7 +85,7 @@ fi
 # 3. Clone repository
 mkdir -p /opt
 rm -rf /opt/alphachain
-git clone {REPO_URL} /opt/alphachain
+git clone --branch {DEPLOY_BRANCH} {REPO_URL} /opt/alphachain
 mkdir -p /opt/alphachain/data /opt/alphachain/logs
 
 # 4. Write Production .env (strictly isolated, chmod 600)
@@ -229,7 +233,9 @@ def deploy_to_ec2():
         "launch_time": inst.get("LaunchTime", "").isoformat() if hasattr(inst.get("LaunchTime", ""), "isoformat") else str(inst.get("LaunchTime", "")),
         "status": "RUNNING",
         "launch_template": LAUNCH_TEMPLATE_ID,
-        "trading_mode": "competition"
+        "trading_mode": "competition",
+        "branch": DEPLOY_BRANCH,
+        "profile": "pyramiding_optimal"
     }
 
     DEPLOY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)

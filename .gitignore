@@ -31,6 +31,8 @@ dist/
 *.sqlite3
 data/trading.db
 data/*.csv
+data/*.pkl
+*.pkl
 data/cache/
 
 # Runtime logs

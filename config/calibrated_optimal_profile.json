@@ -1,0 +1,19 @@
+{
+  "profile_name": "calibrated_optimal",
+  "factor_weights": {
+    "lead_lag": 0.3311,
+    "idio_mom": 0.458,
+    "reversal": 0.3036,
+    "vol_flow": -0.6562
+  },
+  "adx_trend_threshold": 23.11,
+  "cost_hurdle": 0.00134,
+  "min_conviction": 0.423,
+  "stop_loss_atr_mult": 1.83,
+  "take_profit_atr_mult": 1.89,
+  "breakeven_atr_mult": 1.25,
+  "max_holding_bars": 24,
+  "is_return_pct": 4.5,
+  "is_max_dd_pct": 3.6,
+  "is_composite_score": 19.66
+}
