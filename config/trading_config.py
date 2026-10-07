@@ -74,9 +74,10 @@ class TradingConfig:
     INITIAL_PORTFOLIO_USD: float = 100000.0
     DYNAMIC_CONCURRENCY_ENABLED: bool = True
     MAX_PORTFOLIO_HEAT_PCT: float = 0.010  # 1.0% cumulative risk heat ceiling
-    MAX_RISK_PER_ASSET_PCT: float = 0.0050  # 0.50% max risk on any single position
-    CHOP_RISK_HEAT_CEILING: float = 0.0040  # 0.40% risk ceiling in chop
-    MAX_CONCURRENT_POSITIONS: int = 8  # Baseline / fallback when dynamic concurrency disabled
+    MAX_RISK_PER_ASSET_PCT: float = 0.0050
+    CHOP_RISK_HEAT_CEILING: float = 0.0040
+    BEAR_RISK_HEAT_CEILING: float = 0.0120
+    MAX_CONCURRENT_POSITIONS: int = 8
     MAX_RISK_PER_TRADE_PCT: float = 0.0025  # Legacy fallback risk per trade
     MAX_ALLOCATION_PER_COIN_PCT: float = 0.20
     MIN_CASH_BUFFER_PCT: float = 0.25
@@ -113,9 +114,10 @@ class TradingConfig:
             self.MAX_PORTFOLIO_HEAT_PCT = 0.015
             self.MAX_RISK_PER_ASSET_PCT = 0.0065
             self.CHOP_RISK_HEAT_CEILING = 0.0090
+            self.BEAR_RISK_HEAT_CEILING = 0.0150
             self.MAX_ALLOCATION_PER_COIN_PCT = 0.30
             self.MIN_CASH_BUFFER_PCT = 0.15
-            self.MAX_HOLDING_BARS = 24  # 6-hour rotation decay for stagnant positions
+            self.MAX_HOLDING_BARS = 24
             self.TAKE_PROFIT_ATR_MULT = 3.5
             self.PYRAMIDING_ENABLED = False
         elif profile == "calibrated_optimal":
@@ -124,6 +126,7 @@ class TradingConfig:
             self.MAX_PORTFOLIO_HEAT_PCT = 0.0150
             self.MAX_RISK_PER_ASSET_PCT = 0.0065
             self.CHOP_RISK_HEAT_CEILING = 0.0090
+            self.BEAR_RISK_HEAT_CEILING = 0.0150
             self.MAX_ALLOCATION_PER_COIN_PCT = 0.25
             self.MIN_CASH_BUFFER_PCT = 0.15
             self.STOP_LOSS_ATR_MULT = 1.83
@@ -138,6 +141,7 @@ class TradingConfig:
             self.MAX_PORTFOLIO_HEAT_PCT = 0.0200
             self.MAX_RISK_PER_ASSET_PCT = 0.0075
             self.CHOP_RISK_HEAT_CEILING = 0.0090
+            self.BEAR_RISK_HEAT_CEILING = 0.0150
             self.MAX_ALLOCATION_PER_COIN_PCT = 0.30  # Allows capital room for winning pyramid additions
             self.MIN_CASH_BUFFER_PCT = 0.15          # Deploy up to 85% of capital (15% cash floor)
             self.STOP_LOSS_ATR_MULT = 1.50

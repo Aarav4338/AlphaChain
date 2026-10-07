@@ -290,7 +290,7 @@ class PositionSizer:
         if regime == MarketRegime.CHOP:
             regime_heat_cap = getattr(trading_config, "CHOP_RISK_HEAT_CEILING", 0.0090)
         elif regime == MarketRegime.BEAR:
-            regime_heat_cap = 0.0  # 100% cash defense for longs
+            regime_heat_cap = getattr(trading_config, "BEAR_RISK_HEAT_CEILING", getattr(trading_config, "MAX_PORTFOLIO_HEAT_PCT", 0.015))
         else:
             regime_heat_cap = getattr(trading_config, "MAX_PORTFOLIO_HEAT_PCT", 0.015)
 

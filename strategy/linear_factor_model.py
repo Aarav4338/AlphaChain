@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 import logging
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
 
@@ -309,6 +309,7 @@ class CryptoLinearFactorModel:
         active_pairs: Optional[List[str]] = None,
         timeframe: str = "1h",
         current_bar_index: int = 0,
+        regime: Optional[Any] = None,
     ) -> List[TradeSignal]:
         active_set = set(active_pairs or [])
         universe = trading_config.ASSET_UNIVERSE
@@ -383,7 +384,7 @@ class CryptoLinearFactorModel:
                 target_dist = stop_dist * 2.0
 
                 if mu_pred > self.cost_hurdle:
-                    if curr_p < ema_50:
+                    if (regime == "BEAR" or getattr(regime, "name", "") == "BEAR") and curr_p < ema_50:
                         continue
                     signals.append(
                         TradeSignal(
@@ -398,7 +399,7 @@ class CryptoLinearFactorModel:
                         )
                     )
                 elif mu_pred < -self.cost_hurdle:
-                    if curr_p > ema_50:
+                    if (regime == "BULL" or getattr(regime, "name", "") == "BULL") and curr_p > ema_50:
                         continue
                     signals.append(
                         TradeSignal(

@@ -79,6 +79,7 @@ class TradingDaemon:
         self.locked_usd = 0.0
         self.last_snapshot_time = 0.0
         self.last_heartbeat_time = 0.0
+        self.last_candle_refresh_time = 0.0
         self.iteration_count = 0
 
     def _setup_signal_handlers(self) -> None:
@@ -106,7 +107,27 @@ class TradingDaemon:
             if df_15m is not None and not df_15m.empty:
                 self.candle_manager.initialize_pair_history(pair, trading_config.TIMEFRAME_ENTRY, df_15m)
 
+        self.last_candle_refresh_time = time.time()
         self.logger.info("Historical candles bootstrapped successfully.")
+
+    def _refresh_historical_candles_periodic(self) -> None:
+        now = time.time()
+        if now - self.last_candle_refresh_time < 900.0:
+            return
+        self.last_candle_refresh_time = now
+        universe = trading_config.ASSET_UNIVERSE
+        for pair in universe:
+            df_1h = self.binance_fetcher.fetch_klines(
+                pair, interval=trading_config.TIMEFRAME_TREND, limit=trading_config.WARMUP_CANDLES_COUNT
+            )
+            if df_1h is not None and not df_1h.empty:
+                self.candle_manager.initialize_pair_history(pair, trading_config.TIMEFRAME_TREND, df_1h)
+
+            df_15m = self.binance_fetcher.fetch_klines(
+                pair, interval=trading_config.TIMEFRAME_ENTRY, limit=trading_config.WARMUP_CANDLES_COUNT
+            )
+            if df_15m is not None and not df_15m.empty:
+                self.candle_manager.initialize_pair_history(pair, trading_config.TIMEFRAME_ENTRY, df_15m)
 
     def run(self) -> None:
         server_time_res = self.client.check_server_time()
@@ -151,6 +172,7 @@ class TradingDaemon:
                 self._record_hourly_snapshot()
                 self._emit_heartbeat()
                 self._check_for_code_updates()
+                self._refresh_historical_candles_periodic()
 
                 elapsed = time.time() - loop_start
                 sleep_needed = max(1.0, trading_config.MAIN_LOOP_SLEEP_SECONDS - elapsed)

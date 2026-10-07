@@ -57,3 +57,13 @@ deploy/deployment_state.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Internal documentation and scratch tools
+docs/
+scripts/test_*
+scripts/audit_*
+scripts/close_*
+scripts/compare_*
+scripts/run_january*
+scripts/run_multi_*
+scripts/deploy_update_ec2.py

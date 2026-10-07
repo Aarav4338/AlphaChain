@@ -54,11 +54,12 @@ class MultiRegimeAlphaStrategy:
         cm = candle_manager or self.candle_manager
         active_set = set(active_pairs or [])
 
+        block_buys = False
         btc_15 = cm.get_candles("BTC/USD", timeframe="15m")
         if btc_15 is not None and len(btc_15) >= 2:
             last_btc_ret = (btc_15["close"].iloc[-1] - btc_15["open"].iloc[-1]) / btc_15["open"].iloc[-1]
             if last_btc_ret < -0.008:
-                return []
+                block_buys = True
 
         regime_result = self.regime_detector.detect_regime(cm, timeframe="1h")
         regime = regime_result.regime
@@ -68,26 +69,26 @@ class MultiRegimeAlphaStrategy:
             active_pairs=list(active_set),
             timeframe="1h",
             current_bar_index=current_bar_index,
+            regime=regime,
         )
 
         filtered_signals: List[TradeSignal] = []
 
         for sig in candidate_signals:
             if sig.action == SignalAction.BUY:
+                if block_buys:
+                    continue
                 if regime == MarketRegime.BULL:
-                    # In BULL: pass all qualifying signals
                     filtered_signals.append(sig)
                 elif regime == MarketRegime.CHOP:
-                    # In CHOP: allow conviction >= 0.40
-                    if sig.conviction >= 0.40:
+                    if sig.conviction >= 0.35:
                         filtered_signals.append(sig)
                 elif regime == MarketRegime.BEAR:
-                    # In BEAR: contract long exposure to 100% cash defense
                     continue
             elif sig.action == SignalAction.SHORT_OPEN:
-                if regime == MarketRegime.BEAR and sig.conviction >= 0.55:
+                if regime == MarketRegime.BEAR and sig.conviction >= 0.50:
                     filtered_signals.append(sig)
-                elif regime == MarketRegime.CHOP and sig.conviction >= 0.45:
+                elif regime == MarketRegime.CHOP and sig.conviction >= 0.35:
                     filtered_signals.append(sig)
 
         filtered_signals.sort(key=lambda s: s.conviction, reverse=True)

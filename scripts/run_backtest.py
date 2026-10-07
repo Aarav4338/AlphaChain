@@ -469,6 +469,12 @@ def main():
         choices=["baseline_sniper", "calibrated_optimal", "pyramiding_optimal", "active_dynamic"],
         help="Trading strategy configuration profile to simulate",
     )
+    parser.add_argument(
+        "--limit_15m",
+        type=int,
+        default=1480,
+        help="Number of 15m candles to fetch",
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -486,8 +492,7 @@ def main():
     )
 
     try:
-        # 1480 15m candles = 15.4 days of historical data (1440 active bars + 40 warmup bars)
-        data_15m, data_1h = engine.fetch_historical_data(limit_15m=1480, limit_1h=400)
+        data_15m, data_1h = engine.fetch_historical_data(limit_15m=args.limit_15m, limit_1h=max(100, args.limit_15m // 4))
         if not data_15m or len(data_15m) < 2:
             print("❌ Unable to fetch sufficient historical data. Exiting.")
             return
