@@ -24,7 +24,6 @@ def mock_setup(tmp_path: Path):
     candle_manager = CandleManager()
     sizer = PositionSizer()
     stop_loss_manager = StopLossManager()
-    alerter = MagicMock()
 
     # Pre-populate candle prices
     candle_manager.latest_ticks["SOL/USD"] = {"price": 150.0, "bid": 149.95, "ask": 150.05}
@@ -37,7 +36,6 @@ def mock_setup(tmp_path: Path):
         position_sizer=sizer,
         stop_loss_manager=stop_loss_manager,
         database=db,
-        email_alerter=alerter,
     )
 
     reconciler = StateReconciler(
@@ -53,7 +51,6 @@ def mock_setup(tmp_path: Path):
         "candle_manager": candle_manager,
         "sizer": sizer,
         "stop_loss_manager": stop_loss_manager,
-        "alerter": alerter,
         "router": router,
         "reconciler": reconciler,
     }

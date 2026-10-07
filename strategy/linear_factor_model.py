@@ -285,7 +285,7 @@ class CryptoLinearFactorModel:
             atr_val = float(curr_p * 0.02)
         atr_val = max(atr_val, curr_p * 0.005)
 
-        stop_dist = max(atr_val * 2.5, curr_p * 0.02)
+        stop_dist = max(atr_val * 1.5, curr_p * 0.015)
         target_dist = stop_dist * 2.0
 
         if v_btc > 0.0 and m_btc > 0.20 and curr_p > ema_50:
@@ -379,7 +379,7 @@ class CryptoLinearFactorModel:
 
                 ema_50 = float(df_pair["close"].ewm(span=50, adjust=False).mean().iloc[-1]) if len(df_pair) >= 20 else curr_p
 
-                stop_dist = max(atr_val * 2.5, curr_p * 0.02)
+                stop_dist = max(atr_val * 1.5, curr_p * 0.015)
                 target_dist = stop_dist * 2.0
 
                 if mu_pred > self.cost_hurdle:
@@ -422,3 +422,6 @@ class CryptoLinearFactorModel:
             self.consecutive_losses[pair] = self.consecutive_losses.get(pair, 0) + 1
         elif net_pnl > 0:
             self.consecutive_losses[pair] = 0
+            # For winning trades, reduce cooldown to 2 bars (30m) instead of 16 bars (4 hours)
+            # so the model can re-enter high-conviction macro continuations without idle lockouts
+            self.last_exit_times[pair] = current_bar_index - max(0, self.cooldown_bars - 2)

@@ -127,3 +127,64 @@ def test_circuit_breaker():
     cb.acknowledge_liquidation()
     assert cb.status == CircuitBreakerStatus.COOLDOWN
     assert cb.is_trading_allowed() is False
+
+
+def test_time_horizon_barrier_stagnant_vs_trending():
+    """
+    Verifies that the time horizon barrier only liquidates STAGNANT / FLAT trades
+    to avoid fee churn, while actively letting profitable trending runners continue.
+    """
+    from config.trading_config import trading_config
+    old_max = trading_config.MAX_HOLDING_BARS
+    trading_config.MAX_HOLDING_BARS = 32
+
+    try:
+        mgr = StopLossManager()
+
+        # 1. Register a position that remains flat / stagnant (price stays near entry)
+        mgr.register_position(
+            pair="FLAT/USD",
+            side=SignalAction.BUY,
+            entry_price=100.0,
+            quantity=10.0,
+            collateral=0.0,
+            stop_loss=90.0,
+            take_profit=120.0,
+            atr=5.0,
+            entry_bar=100,
+        )
+
+        # Bar 131 (31 bars later, under limit): No exit
+        sig_flat_pre = mgr.update_price("FLAT/USD", current_price=100.5, current_bar=131)
+        assert sig_flat_pre is None
+
+        # Bar 132 (32 bars later, hit limit): Stagnant trade should exit to recycle capital!
+        sig_flat_exit = mgr.update_price("FLAT/USD", current_price=100.5, current_bar=132)
+        assert sig_flat_exit is not None
+        assert sig_flat_exit.action == SignalAction.SELL
+        assert "Time Horizon Barrier (Stagnant Capital" in sig_flat_exit.reason
+
+        # 2. Register a position that is a winning trending runner (+2.0x ATR profit)
+        mgr.register_position(
+            pair="RUNNER/USD",
+            side=SignalAction.SHORT_OPEN,
+            entry_price=100.0,
+            quantity=10.0,
+            collateral=500.0,
+            stop_loss=110.0,
+            take_profit=70.0,
+            atr=5.0,
+            entry_bar=100,
+        )
+
+        # Price drops to $88.0 (+2.4x ATR profit on short, trailing stop ratcheted)
+        mgr.update_price("RUNNER/USD", current_price=88.0, current_bar=110)
+        assert mgr.positions["RUNNER/USD"].trailing_activated is True
+
+        # Bar 132 (32 bars elapsed): Because it's a winning runner, it must NOT be time-killed!
+        sig_runner_time = mgr.update_price("RUNNER/USD", current_price=88.0, current_bar=132)
+        assert sig_runner_time is None  # Preserved to prevent fee churn and let trend run
+
+    finally:
+        trading_config.MAX_HOLDING_BARS = old_max
+

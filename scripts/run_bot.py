@@ -121,6 +121,10 @@ class TradingDaemon:
         self.bootstrap_historical_candles()
 
         self.portfolio_equity, self.free_usd = self.reconciler.reconcile_on_startup()
+        bal_res = self.client.get_balance()
+        if bal_res and bal_res.get("Success", False):
+            w = bal_res.get("SpotWallet") or bal_res.get("Wallet", {})
+            self.locked_usd = float(w.get("USD", {}).get("Lock", 0.0))
         self.circuit_breaker.peak_equity = max(self.circuit_breaker.peak_equity, self.portfolio_equity)
 
         self.logger.info(
@@ -146,6 +150,7 @@ class TradingDaemon:
 
                 self._record_hourly_snapshot()
                 self._emit_heartbeat()
+                self._check_for_code_updates()
 
                 elapsed = time.time() - loop_start
                 sleep_needed = max(1.0, trading_config.MAIN_LOOP_SLEEP_SECONDS - elapsed)
@@ -182,7 +187,17 @@ class TradingDaemon:
                     )
 
     def _update_portfolio_valuation(self) -> None:
+        now = time.time()
+        if now - getattr(self, "_last_balance_sync", 0.0) >= 60.0:
+            self._last_balance_sync = now
+            bal = self.client.get_balance()
+            if bal and bal.get("Success", False):
+                wallet = bal.get("SpotWallet") or bal.get("Wallet", {})
+                self.free_usd = float(wallet.get("USD", {}).get("Free", self.free_usd))
+                self.locked_usd = float(wallet.get("USD", {}).get("Lock", self.locked_usd))
+
         positions_value = 0.0
+        short_collateral_sum = 0.0
         for pair, pos in self.stop_loss_manager.positions.items():
             last_p = self.candle_manager.get_latest_price(pair) or pos.entry_price
             if pos.side == SignalAction.BUY:
@@ -190,8 +205,10 @@ class TradingDaemon:
             elif pos.side == SignalAction.SHORT_OPEN:
                 pnl = (pos.entry_price - last_p) * pos.quantity
                 positions_value += max(0.0, pos.collateral + pnl)
+                short_collateral_sum += pos.collateral
 
-        self.portfolio_equity = self.free_usd + self.locked_usd + positions_value
+        unallocated_lock = max(0.0, self.locked_usd - short_collateral_sum)
+        self.portfolio_equity = self.free_usd + unallocated_lock + positions_value
 
     def _evaluate_circuit_breaker(self) -> None:
         cb_status = self.circuit_breaker.update_equity(self.portfolio_equity)
@@ -222,7 +239,7 @@ class TradingDaemon:
             if exit_sig:
                 success = self.order_router.execute_exit(exit_sig, current_price=last_p)
                 if success:
-                    self.strategy.record_exit(pair, self.iteration_count)
+                    self.strategy.record_exit(pair, self.iteration_count, net_pnl=self.order_router.last_realized_pnl)
                     bal = self.client.get_balance()
                     if bal and bal.get("Success", False):
                         wallet = bal.get("SpotWallet") or bal.get("Wallet", {})
@@ -278,6 +295,11 @@ class TradingDaemon:
 
     def _evaluate_and_enter_trades(self) -> None:
         active_pairs = list(self.stop_loss_manager.positions.keys())
+        max_positions = getattr(trading_config, "MAX_CONCURRENT_POSITIONS", 8)
+        max_allowed = max(0, max_positions - len(active_pairs))
+        if max_allowed <= 0:
+            return
+
         signals = self.strategy.generate_signals(
             self.candle_manager,
             active_pairs=active_pairs,
@@ -288,6 +310,7 @@ class TradingDaemon:
             return
 
         signals.sort(key=lambda s: s.conviction, reverse=True)
+        signals = signals[:max_allowed]
 
         regime_res = self.regime_detector.detect_regime(self.candle_manager)
         current_heat = self.stop_loss_manager.get_portfolio_risk_heat(self.portfolio_equity)
@@ -425,6 +448,65 @@ class TradingDaemon:
 
             except Exception as e:
                 self.logger.warning(f"Failed to write on-disk heartbeat: {e}")
+
+    def _check_for_code_updates(self) -> None:
+        """
+        Polls GitHub origin/main periodically. If a new commit is detected on remote,
+        performs a hard reset to origin/main and exits cleanly.
+        Systemd (Restart=always) will automatically relaunch the daemon with the new code.
+        Completely eliminates the need for manual SSH/SSM deployment!
+        """
+        now = time.time()
+        # Check every 5 minutes (300 seconds)
+        if now - getattr(self, "_last_update_check", 0.0) < 300.0:
+            return
+        self._last_update_check = now
+
+        try:
+            import subprocess
+            fetch_res = subprocess.run(
+                ["git", "fetch", "origin", "main"],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if fetch_res.returncode != 0:
+                return
+
+            local_res = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            remote_res = subprocess.run(
+                ["git", "rev-parse", "origin/main"],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            local_hash = local_res.stdout.strip()
+            remote_hash = remote_res.stdout.strip()
+
+            if local_hash and remote_hash and local_hash != remote_hash:
+                self.logger.info(
+                    f"🚀 Remote code update detected: {local_hash[:7]} -> {remote_hash[:7]}. "
+                    f"Syncing and restarting daemon via systemd..."
+                )
+                subprocess.run(
+                    ["git", "reset", "--hard", "origin/main"],
+                    cwd=str(PROJECT_ROOT),
+                    capture_output=True,
+                    timeout=20,
+                )
+                self.running = False
+                sys.exit(0)
+        except Exception as e:
+            self.logger.debug(f"Auto-update poll skipped: {e}")
 
 
 if __name__ == "__main__":

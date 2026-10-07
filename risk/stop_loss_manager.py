@@ -125,50 +125,72 @@ class StopLossManager:
             return None
 
         pos.current_price = current_price
+        safe_atr = max(pos.atr, 1e-6)
+
+        # Update high/low watermarks and calculate profit metrics
+        if pos.side == SignalAction.BUY:
+            pos.highest_price = max(pos.highest_price, current_price)
+            current_profit_atr = (current_price - pos.entry_price) / safe_atr
+            peak_profit_atr = (pos.highest_price - pos.entry_price) / safe_atr
+        else:
+            pos.lowest_price = min(pos.lowest_price, current_price)
+            current_profit_atr = (pos.entry_price - current_price) / safe_atr
+            peak_profit_atr = (pos.entry_price - pos.lowest_price) / safe_atr
+
+        is_trending_runner = (
+            current_profit_atr >= 0.3
+            or peak_profit_atr >= 1.2
+            or pos.trailing_activated
+            or pos.breakeven_activated
+        )
 
         # ----------------------------------------------------------------------
-        # 1. TIME-HORIZON BARRIER (Max Holding Duration Check)
+        # 1. TIME-HORIZON BARRIER (Max Holding Duration Check for STAGNANT Capital)
         # ----------------------------------------------------------------------
+        # Marcos Lopez de Prado Triple Barrier Method:
+        # Vertical (time) barriers exist strictly to recycle STAGNANT / DEAD capital
+        # that ties up margin without producing alpha.
+        # Active trending winners must NEVER be cut by an arbitrary clock — doing so
+        # induces severe fee churn (paying taker exit fees + re-entry fees) and cuts runners.
         max_bars = getattr(trading_config, "MAX_HOLDING_BARS", 0)
         if max_bars > 0:
-            # Wall-clock duration check (for live trading daemon)
-            max_seconds = max_bars * 15 * 60  # e.g. 24 bars * 900s = 6.0 hours
             now_sec = time.time()
-            if pos.entry_time > 0.0 and (now_sec - pos.entry_time) >= max_seconds:
-                elapsed_hrs = (now_sec - pos.entry_time) / 3600.0
-                action = SignalAction.SELL if pos.side == SignalAction.BUY else SignalAction.SHORT_CLOSE
-                logger.info(f"⏳ Time Horizon Barrier reached for {pair} after {elapsed_hrs:.1f} hours.")
-                return ExitSignal(
-                    pair=pair,
-                    action=action,
-                    quantity=pos.quantity,
-                    collateral=pos.collateral if pos.side == SignalAction.SHORT_OPEN else 0.0,
-                    order_type="MARKET",
-                    reason=f"Time Horizon Barrier ({elapsed_hrs:.1f}h)",
-                )
+            is_time_expired = False
+            elapsed_desc = ""
 
-            # Bar-based index check (for historical backtest simulations)
-            if current_bar is not None and pos.entry_bar > 0:
+            if pos.entry_time > 0.0 and (now_sec - pos.entry_time) >= (max_bars * 15 * 60):
+                elapsed_hrs = (now_sec - pos.entry_time) / 3600.0
+                is_time_expired = True
+                elapsed_desc = f"{elapsed_hrs:.1f} hours"
+            elif current_bar is not None and pos.entry_bar > 0 and (current_bar - pos.entry_bar) >= max_bars:
                 holding_bars = current_bar - pos.entry_bar
-                if holding_bars >= max_bars:
+                is_time_expired = True
+                elapsed_desc = f"{holding_bars} bars"
+
+            if is_time_expired:
+                if is_trending_runner:
+                    logger.debug(
+                        f"⏳ Time limit reached for {pair} ({elapsed_desc}), but position is an active runner "
+                        f"({current_profit_atr:+.2f}x ATR, Trailing: {pos.trailing_activated}). "
+                        f"Preserving position to avoid fee churn; trailing stop will manage exit."
+                    )
+                else:
                     action = SignalAction.SELL if pos.side == SignalAction.BUY else SignalAction.SHORT_CLOSE
-                    logger.info(f"⏳ Time Horizon Barrier reached for {pair} after {holding_bars} bars.")
+                    logger.info(f"⏳ Time Horizon Barrier reached for stagnant {pair} after {elapsed_desc}.")
                     return ExitSignal(
                         pair=pair,
                         action=action,
                         quantity=pos.quantity,
                         collateral=pos.collateral if pos.side == SignalAction.SHORT_OPEN else 0.0,
                         order_type="MARKET",
-                        reason=f"Time Horizon Barrier ({holding_bars} bars)",
+                        reason=f"Time Horizon Barrier (Stagnant Capital {elapsed_desc})",
                     )
 
         # ----------------------------------------------------------------------
         # 2. LONG POSITION LOGIC
         # ----------------------------------------------------------------------
-        safe_atr = max(pos.atr, 1e-6)
         if pos.side == SignalAction.BUY:
-            pos.highest_price = max(pos.highest_price, current_price)
-            profit_atr = (pos.highest_price - pos.entry_price) / safe_atr
+            profit_atr = peak_profit_atr
 
             # Barrier A: Breakeven Ratchet (+1.2x ATR profit)
             be_mult = getattr(trading_config, "BREAKEVEN_ACTIVATION_ATR_MULT", 1.2)

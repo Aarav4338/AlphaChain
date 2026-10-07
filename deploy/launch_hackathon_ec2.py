@@ -3,6 +3,8 @@ import sys
 import time
 import base64
 import json
+import io
+import tarfile
 import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
@@ -56,7 +58,14 @@ def get_env_content() -> str:
     out_lines.append("TRADING_PROFILE=pyramiding_optimal\n")
     return "".join(out_lines)
 
-def build_user_data_script(env_content: str) -> str:
+def get_clone_url() -> str:
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if token:
+        log("Using authenticated GitHub clone URL from GITHUB_TOKEN.")
+        return f"https://x-access-token:{token}@github.com/Aarav4338/Carrotcuant.git"
+    return REPO_URL
+
+def build_user_data_script(env_content: str, clone_url: str = REPO_URL) -> str:
     env_b64 = base64.b64encode(env_content.encode("utf-8")).decode("ascii")
 
     script = f"""#!/bin/bash
@@ -85,22 +94,22 @@ fi
 # 3. Clone repository
 mkdir -p /opt
 rm -rf /opt/alphachain
-git clone --branch {DEPLOY_BRANCH} {REPO_URL} /opt/alphachain
+git clone --branch {DEPLOY_BRANCH} {clone_url} /opt/alphachain
+git -C /opt/alphachain remote set-url origin https://github.com/Aarav4338/Carrotcuant.git
 mkdir -p /opt/alphachain/data /opt/alphachain/logs
 
 # 4. Write Production .env (strictly isolated, chmod 600)
 cat << 'EOF' | base64 -d > /opt/alphachain/.env
 {env_b64}
 EOF
-chown -R ec2-user:ec2-user /opt/alphachain
 chmod 600 /opt/alphachain/.env
-chmod 750 /opt/alphachain
 
 # 5. Setup Python Virtual Environment and Dependencies
 python3 -m venv /opt/alphachain/venv
-chown -R ec2-user:ec2-user /opt/alphachain/venv
-sudo -u ec2-user /opt/alphachain/venv/bin/pip install --upgrade pip
-sudo -u ec2-user /opt/alphachain/venv/bin/pip install -r /opt/alphachain/requirements.txt
+/opt/alphachain/venv/bin/pip install --upgrade pip
+/opt/alphachain/venv/bin/pip install -r /opt/alphachain/requirements.txt
+chown -R ec2-user:ec2-user /opt/alphachain
+chmod 750 /opt/alphachain
 
 # 6. Install AlphaChain 24/7 Systemd Service
 cat << 'EOF' > /etc/systemd/system/alphachain.service
@@ -179,7 +188,8 @@ def deploy_to_ec2():
 
     # 2. Build UserData script
     env_content = get_env_content()
-    user_data_script = build_user_data_script(env_content)
+    clone_url = get_clone_url()
+    user_data_script = build_user_data_script(env_content, clone_url)
     log(f"UserData script size: {len(user_data_script)} bytes (Limit: 25,600)")
 
     # 3. Launch EC2 instance via Hackathon Launch Template

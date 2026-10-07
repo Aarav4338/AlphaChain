@@ -19,14 +19,14 @@ class OrderRouter:
         position_sizer: PositionSizer,
         stop_loss_manager: StopLossManager,
         database: Database,
-        email_alerter: Optional[object] = None,
+        **kwargs,
     ):
         self.client: RoostooClient = roostoo_client
         self.candle_manager: CandleManager = candle_manager
         self.sizer: PositionSizer = position_sizer
         self.stop_loss_manager: StopLossManager = stop_loss_manager
         self.db: Database = database
-        self.email_alerter = email_alerter
+        self.last_realized_pnl: float = 0.0
 
     def execute_entry(
         self,
@@ -311,6 +311,7 @@ class OrderRouter:
                 entry_price = pos.entry_price if pos else filled_price
                 realized_pnl = (filled_price - entry_price) * exit_signal.quantity
                 pnl_pct = ((filled_price / entry_price) - 1.0) * 100.0 if entry_price > 0 else 0.0
+                self.last_realized_pnl = realized_pnl
 
                 self.stop_loss_manager.remove_position(pair)
                 self.db.remove_active_position(pair)
@@ -347,6 +348,7 @@ class OrderRouter:
 
                 entry_price = pos.entry_price if pos else close_price
                 pnl_pct = ((entry_price / close_price) - 1.0) * 100.0 if close_price > 0 else 0.0
+                self.last_realized_pnl = realized_pnl
 
                 self.stop_loss_manager.remove_position(pair)
                 self.db.remove_active_position(pair)

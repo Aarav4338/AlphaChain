@@ -71,6 +71,12 @@ class StateReconciler:
                 if cts and p not in order_fill_times:
                     order_fill_times[p] = float(cts) / 1000.0
 
+        # 5. Fetch live tickers as fallback pricing for spot holdings
+        ticker_res = self.client.get_ticker()
+        ticker_data: Dict[str, Dict[str, Any]] = {}
+        if ticker_res and ticker_res.get("Success", False):
+            ticker_data = ticker_res.get("Data", {})
+
         # ----------------------------------------------------------------------
         # Reconcile Spot Long Holdings
         # ----------------------------------------------------------------------
@@ -86,6 +92,10 @@ class StateReconciler:
 
             pair = f"{coin}/USD"
             last_price = (self.candle_manager.get_latest_price(pair) or 0.0) if self.candle_manager is not None else 0.0
+            if last_price <= 0.0 and pair in ticker_data:
+                last_price = float(ticker_data[pair].get("LastPrice", 0.0))
+            if last_price <= 0.0 and pair in saved_positions:
+                last_price = float(saved_positions[pair].get("entry_price", 0.0))
             coin_value = coin_qty * last_price
 
             # If coin holding value > $15 (ignore tiny rounding dust like 0.0001 BTC)
@@ -118,6 +128,7 @@ class StateReconciler:
         # Reconcile Spot Short Holdings
         # ----------------------------------------------------------------------
         total_short_value = 0.0
+        total_short_collateral = 0.0
 
         for s in live_shorts:
             pair = s.get("Pair", "")
@@ -127,6 +138,7 @@ class StateReconciler:
             pos_val = float(s.get("PositionValue", collateral))
 
             total_short_value += pos_val
+            total_short_collateral += collateral
 
             if pair and pair not in self.stop_loss_manager.positions:
                 saved = saved_positions.get(pair)
@@ -148,8 +160,10 @@ class StateReconciler:
                 )
                 logger.info(f"Restored Short position for {pair}: Collateral=${collateral:.2f}")
 
-        # Compute total portfolio equity
-        total_equity = free_usd + locked_usd + total_spot_equity + total_short_value
+        # Compute total portfolio equity without double-counting margin collateral
+        # If locked_usd in wallet already holds short collateral, do not count it twice
+        unallocated_lock = max(0.0, locked_usd - total_short_collateral)
+        total_equity = free_usd + unallocated_lock + total_spot_equity + total_short_value
         logger.info(
             f"✅ State Reconciliation Complete: Total Equity=${total_equity:.2f} | "
             f"Free USD=${free_usd:.2f} | Spot Value=${total_spot_equity:.2f} | "

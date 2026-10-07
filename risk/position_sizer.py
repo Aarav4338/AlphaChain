@@ -58,7 +58,7 @@ class PositionSizer:
         "AAVE/USD": 3, "ARB/USD": 1, "BONK/USD": 0, "CRV/USD": 1, "DOT/USD": 2,
         "ENA/USD": 2, "FET/USD": 1, "FIL/USD": 2, "ICP/USD": 2, "LTC/USD": 3,
         "ONDO/USD": 1, "PENDLE/USD": 1, "PEPE/USD": 0, "POL/USD": 1, "SEI/USD": 1,
-        "SHIB/USD": 0, "TAO/USD": 4, "TON/USD": 2, "TRX/USD": 1, "UNI/USD": 2,
+        "SHIB/USD": 0, "TAO/USD": 4, "HBAR/USD": 0, "TRX/USD": 1, "UNI/USD": 2,
         "WIF/USD": 2, "WLD/USD": 1, "XLM/USD": 0,
     }
 
