@@ -86,7 +86,7 @@ def test_order_router_buy_maker_execution(mock_setup):
         reason="BULL_EMA_MOMENTUM",
     )
 
-    # Execute maker buy
+    # Execute market buy
     success = router.execute_entry(
         signal=signal,
         portfolio_equity=100000.0,
@@ -99,15 +99,15 @@ def test_order_router_buy_maker_execution(mock_setup):
     call_args = client.place_order.call_args[1]
     assert call_args["pair"] == "SOL/USD"
     assert call_args["side"] == "BUY"
-    assert call_args["order_type"] == "LIMIT"
-    assert pytest.approx(call_args["price"]) == 149.95
+    assert call_args["order_type"] == "MARKET"
+    assert call_args["price"] is None
 
     # Check position registration in memory and database
     assert "SOL/USD" in slm.positions
     assert len(db.get_active_positions()) == 1
     trades = db.get_all_trades()
     assert len(trades) == 1
-    assert trades.iloc[0]["order_type"] == "LIMIT"
+    assert trades.iloc[0]["order_type"] == "MARKET"
 
 
 def test_order_router_sell_exit(mock_setup):

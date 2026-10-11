@@ -81,6 +81,7 @@ class TradingConfig:
     MAX_RISK_PER_TRADE_PCT: float = 0.0025  # Legacy fallback risk per trade
     MAX_ALLOCATION_PER_COIN_PCT: float = 0.20
     MIN_CASH_BUFFER_PCT: float = 0.25
+    MIN_POSITION_CAPITAL_USD: float = 10.0
 
     STOP_LOSS_ATR_MULT: float = 1.5
     TAKE_PROFIT_ATR_MULT: float = 1.8
@@ -108,32 +109,25 @@ class TradingConfig:
 
     def apply_profile(self, profile: str = "active_dynamic") -> None:
         """Apply pre-calibrated parameter profiles for dynamic active vs baseline sniper trading."""
-        if profile == "active_dynamic":
+        if profile in ("concentrated_alpha", "calibrated_optimal", "active_dynamic"):
             self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_44.copy()
-            self.ADX_TREND_THRESHOLD = 18.0
-            self.MAX_PORTFOLIO_HEAT_PCT = 0.015
-            self.MAX_RISK_PER_ASSET_PCT = 0.0065
-            self.CHOP_RISK_HEAT_CEILING = 0.0090
-            self.BEAR_RISK_HEAT_CEILING = 0.0150
-            self.MAX_ALLOCATION_PER_COIN_PCT = 0.30
-            self.MIN_CASH_BUFFER_PCT = 0.15
-            self.MAX_HOLDING_BARS = 24
-            self.TAKE_PROFIT_ATR_MULT = 3.5
-            self.PYRAMIDING_ENABLED = False
-        elif profile == "calibrated_optimal":
-            self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_44.copy()
-            self.ADX_TREND_THRESHOLD = 23.11
-            self.MAX_PORTFOLIO_HEAT_PCT = 0.0150
-            self.MAX_RISK_PER_ASSET_PCT = 0.0065
-            self.CHOP_RISK_HEAT_CEILING = 0.0090
-            self.BEAR_RISK_HEAT_CEILING = 0.0150
-            self.MAX_ALLOCATION_PER_COIN_PCT = 0.25
-            self.MIN_CASH_BUFFER_PCT = 0.15
-            self.STOP_LOSS_ATR_MULT = 1.83
-            self.TAKE_PROFIT_ATR_MULT = 1.89
-            self.BREAKEVEN_ACTIVATION_ATR_MULT = 1.25
-            self.MAX_HOLDING_BARS = 24
-            self.PYRAMIDING_ENABLED = False
+            self.ADX_TREND_THRESHOLD = 20.0
+            self.DYNAMIC_CONCURRENCY_ENABLED = False
+            self.MAX_CONCURRENT_POSITIONS = 8        # Breathing room: allows 6-8 concurrent positions ($10k-$20k each)
+            self.MAX_PORTFOLIO_HEAT_PCT = 0.0200     # 2.0% cumulative risk heat ceiling
+            self.MAX_RISK_PER_ASSET_PCT = 0.0060     # 0.6% ($600) risk per asset
+            self.CHOP_RISK_HEAT_CEILING = 0.0180     # 1.8% in CHOP regime (ample heat for 3-4 full positions)
+            self.BEAR_RISK_HEAT_CEILING = 0.0180
+            self.MAX_ALLOCATION_PER_COIN_PCT = 0.20  # Up to $20,000 per coin on top conviction
+            self.MIN_CASH_BUFFER_PCT = 0.20          # 80% capital deployment with 20% safe cash floor
+            self.MIN_POSITION_CAPITAL_USD = 8000.0   # Enforce $8,000 minimum trade capital floor (no micro-dust)
+            self.STOP_LOSS_ATR_MULT = 1.50
+            self.TAKE_PROFIT_ATR_MULT = 2.20         # Multi-ATR profit target
+            self.BREAKEVEN_ACTIVATION_ATR_MULT = 1.20
+            self.TRAILING_ACTIVATION_ATR_MULT = 1.80
+            self.TRAILING_DISTANCE_ATR_MULT = 1.50
+            self.MAX_HOLDING_BARS = 0               # No arbitrary time barrier; let runners run!
+            self.PYRAMIDING_ENABLED = False         # Full size entered upfront into top conviction trades
         elif profile == "pyramiding_optimal":
             self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_44.copy()
             self.ADX_TREND_THRESHOLD = 23.11

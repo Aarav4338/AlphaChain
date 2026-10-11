@@ -489,11 +489,8 @@ class PositionSizer:
             raw_qty = target_risk_usd / stop_dist
             capital_needed = raw_qty * sig.entry_price
 
-            # Per-coin concentration limit
-            max_capital_share = min(
-                trading_config.MAX_ALLOCATION_PER_COIN_PCT,
-                (1.0 - trading_config.MIN_CASH_BUFFER_PCT) / max(1, total_active_assets),
-            )
+            # Per-coin concentration limit (caps any single coin to MAX_ALLOCATION_PER_COIN_PCT, allowing conviction-proportional sizing)
+            max_capital_share = getattr(trading_config, "MAX_ALLOCATION_PER_COIN_PCT", 0.25)
             max_capital_per_coin = portfolio_equity * max_capital_share
             if capital_needed > max_capital_per_coin:
                 capital_needed = max_capital_per_coin
@@ -572,7 +569,8 @@ class PositionSizer:
             final_notional = final_qty * sig.entry_price
             actual_risk_usd = final_qty * cand["stop_dist"]
 
-            if final_notional < 10.0:
+            min_pos_capital = getattr(trading_config, "MIN_POSITION_CAPITAL_USD", 10.0)
+            if final_notional < min_pos_capital:
                 results[sig.pair] = OrderSizeResult(
                     allowed=False,
                     pair=sig.pair,
@@ -581,7 +579,7 @@ class PositionSizer:
                     collateral=0.0,
                     estimated_capital=0.0,
                     risk_usd=0.0,
-                    reason=f"Order size too small ({final_notional:.2f} USD < $10 minimum)",
+                    reason=f"Order size too small ({final_notional:.2f} USD < ${min_pos_capital:.2f} minimum capital floor)",
                 )
             else:
                 is_buy = sig.action == SignalAction.BUY

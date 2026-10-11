@@ -718,3 +718,140 @@ def test_order_router_accepts_and_preserves_dynamic_size_result():
     assert kwargs.get("quantity") == 12.345
     assert slm.positions["SOL/USD"].quantity == 12.345
 
+
+def test_concentrated_alpha_enforces_capital_floor_and_meaningful_sizing():
+    """
+    Verifies that the concentrated_alpha profile:
+    1. Rejects micro-positions (< $8,000 capital floor).
+    2. Sizes qualifying high-conviction trades with meaningful capital ($10k-$20k).
+    3. Respects the max allocation cap (20% = $20,000).
+    """
+    trading_config.apply_profile("concentrated_alpha")
+    try:
+        sizer = PositionSizer()
+        equity = 100000.0
+        cash = 80000.0
+
+        # Case A: Signal with wide stop (30% distance) where risk budget limits capital to ~$2,000
+        sig_wide = TradeSignal(
+            pair="WIDE/USD",
+            action=SignalAction.BUY,
+            conviction=0.6,
+            entry_price=10.0,
+            stop_loss_price=7.0,  # 30% stop distance
+            take_profit_price=16.0,
+            atr=2.0,
+            reason="Wide stop signal",
+        )
+
+        res_wide = sizer.calculate_dynamic_portfolio_sizes(
+            signals=[sig_wide],
+            portfolio_equity=equity,
+            free_usd=cash,
+            current_open_positions=[],
+            regime=MarketRegime.BULL,
+        )
+        assert len(res_wide) == 1
+        assert res_wide[0].allowed is False
+        assert "minimum capital floor" in res_wide[0].reason
+
+        # Case B: Signal with tight ATR stop (3.0% distance)
+        sig_tight = TradeSignal(
+            pair="SOL/USD",
+            action=SignalAction.BUY,
+            conviction=0.85,
+            entry_price=100.0,
+            stop_loss_price=97.0,  # 3% stop distance
+            take_profit_price=106.0,
+            atr=2.0,
+            reason="High conviction tight ATR signal",
+        )
+
+        res_tight = sizer.calculate_dynamic_portfolio_sizes(
+            signals=[sig_tight],
+            portfolio_equity=equity,
+            free_usd=cash,
+            current_open_positions=[],
+            regime=MarketRegime.BULL,
+        )
+        assert len(res_tight) == 1
+        assert res_tight[0].allowed is True
+        # Must be meaningful capital: between $8,000 floor and $20,000 cap
+        assert res_tight[0].estimated_capital >= 8000.0
+        assert res_tight[0].estimated_capital <= 20000.0 + 1e-4
+        assert res_tight[0].risk_usd <= trading_config.MAX_RISK_PER_ASSET_PCT * equity + 1e-4
+
+    finally:
+        # Restore default test configuration
+        trading_config.apply_profile("active_dynamic")
+        trading_config.MIN_POSITION_CAPITAL_USD = 10.0
+
+
+def test_prune_subscale_positions_preserves_core_and_exits_dust():
+    """
+    Verifies that _prune_subscale_positions:
+    1. Preserves core positions (>= $2,000, like BTC $12,000 and NEAR $4,700).
+    2. Autonomously exits subscale dust positions (< $2,000, like $60 WLD, $113 XLM, $1,135 shorts).
+    """
+    from unittest.mock import MagicMock
+    from scripts.run_bot import TradingDaemon
+
+    daemon = TradingDaemon.__new__(TradingDaemon)
+    daemon.logger = MagicMock()
+    daemon.client = MagicMock()
+    daemon.candle_manager = MagicMock()
+    daemon.candle_manager.get_latest_price.return_value = 100.0
+    daemon.stop_loss_manager = StopLossManager()
+    daemon.order_router = MagicMock()
+    daemon.order_router.execute_exit.return_value = True
+
+    # Register core long ($12,000 value)
+    daemon.stop_loss_manager.register_position(
+        pair="BTC/USD",
+        side=SignalAction.BUY,
+        entry_price=100.0,
+        quantity=120.0,  # $12,000 value
+        collateral=0.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        atr=2.0,
+    )
+    # Register micro dust long ($60 value)
+    daemon.stop_loss_manager.register_position(
+        pair="WLD/USD",
+        side=SignalAction.BUY,
+        entry_price=100.0,
+        quantity=0.6,  # $60 value
+        collateral=0.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        atr=2.0,
+    )
+    # Register subscale short ($1,135 collateral)
+    daemon.stop_loss_manager.register_position(
+        pair="BNB/USD",
+        side=SignalAction.SHORT_OPEN,
+        entry_price=100.0,
+        quantity=11.35,
+        collateral=1135.0,  # $1,135 collateral (< $2,000)
+        stop_loss=105.0,
+        take_profit=90.0,
+        atr=2.0,
+    )
+
+    daemon.client.get_balance.return_value = {
+        "Success": True,
+        "SpotWallet": {"USD": {"Free": 80000.0, "Lock": 0.0}},
+    }
+
+    daemon._prune_subscale_positions()
+
+    # Core position BTC/USD should NOT be pruned
+    calls = daemon.order_router.execute_exit.call_args_list
+    exited_pairs = [c[0][0].pair for c in calls]
+    assert "BTC/USD" not in exited_pairs
+    assert "WLD/USD" in exited_pairs
+    assert "BNB/USD" in exited_pairs
+
+
+

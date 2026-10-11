@@ -229,7 +229,7 @@ class StopLossManager:
                     reason=reason,
                 )
 
-            # Check Take Profit target trigger (LIMIT order to capture 0.05% maker fee)
+            # Check Take Profit target trigger (MARKET order for guaranteed top-of-book fill)
             if current_price >= pos.take_profit:
                 logger.info(f"🎯 Take Profit target reached for {pair} at {current_price:.4f}")
                 return ExitSignal(
@@ -237,7 +237,7 @@ class StopLossManager:
                     action=SignalAction.SELL,
                     quantity=pos.quantity,
                     collateral=0.0,
-                    order_type="LIMIT",
+                    order_type="MARKET",
                     reason="Take Profit Target Hit",
                 )
 

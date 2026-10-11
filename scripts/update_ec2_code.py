@@ -19,7 +19,19 @@ if str(PROJECT_ROOT) not in sys.path:
 
 load_dotenv(override=True)
 
-INSTANCE_ID = "i-0b0c271715def1290"
+def get_target_instance_id() -> str:
+    state_file = PROJECT_ROOT / "deploy" / "deployment_state.json"
+    if state_file.exists():
+        try:
+            import json
+            with open(state_file, "r") as f:
+                data = json.load(f)
+                return data.get("instance_id", "i-0b3b42557fe5366a1")
+        except Exception:
+            pass
+    return os.getenv("EC2_INSTANCE_ID", "i-0b3b42557fe5366a1")
+
+INSTANCE_ID = get_target_instance_id()
 REGION = os.getenv("AWS_REGION") or "ap-southeast-2"
 
 def get_ssm_client():

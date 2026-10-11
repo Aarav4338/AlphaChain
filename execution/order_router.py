@@ -33,8 +33,8 @@ class OrderRouter:
         signal: TradeSignal,
         portfolio_equity: float,
         free_usd: float,
-        prefer_maker: bool = True,
         size_result: Optional[OrderSizeResult] = None,
+        **kwargs,
     ) -> bool:
         pair = signal.pair
 
@@ -54,22 +54,14 @@ class OrderRouter:
             return False
 
         if signal.action == SignalAction.BUY:
-            bid_ask = self.candle_manager.get_latest_bid_ask(pair)
-            order_price = None
             order_type = "MARKET"
-
-            if prefer_maker and bid_ask:
-                best_bid, _ = bid_ask
-                order_price = best_bid
-                order_type = "LIMIT"
-
-            logger.info(f"Placing BUY order for {pair}: Qty={size_res.quantity} | Type={order_type} | LimitPrice={order_price}")
+            logger.info(f"Placing BUY order for {pair}: Qty={size_res.quantity} | Type={order_type}")
 
             res = self.client.place_order(
                 pair=pair,
                 side="BUY",
                 quantity=size_res.quantity,
-                price=order_price,
+                price=None,
                 order_type=order_type,
             )
 

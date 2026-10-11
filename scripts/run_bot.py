@@ -42,7 +42,7 @@ class TradingDaemon:
             log_dir=settings.LOGS_DIR,
             log_level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
         )
-        profile = os.getenv("TRADING_PROFILE", "pyramiding_optimal")
+        profile = os.getenv("TRADING_PROFILE", "concentrated_alpha")
         trading_config.apply_profile(profile)
         self.logger.info(f"Initializing AlphaChain Autonomous Trading Daemon (Profile: {profile})")
 
@@ -164,6 +164,7 @@ class TradingDaemon:
                 self._update_portfolio_valuation()
                 self._evaluate_circuit_breaker()
                 self._manage_active_positions()
+                self._prune_subscale_positions()
                 self._evaluate_pyramid_scale_ins()
 
                 if self.circuit_breaker.is_trading_allowed():
@@ -315,10 +316,60 @@ class TradingDaemon:
                         self.free_usd = float(wallet.get("USD", {}).get("Free", self.free_usd))
                         self.locked_usd = float(wallet.get("USD", {}).get("Lock", 0.0))
 
+    def _prune_subscale_positions(self) -> None:
+        """
+        Autonomous daemon housekeeping:
+        Safely prunes legacy subscale positions (< $2,000 notional/collateral)
+        to reclaim concurrency slots and consolidate capital into full-scale ($10k-$20k) alpha positions.
+        Executed autonomously by the daemon during its regular cycle (no manual operator intervention).
+        """
+        from risk.stop_loss_manager import ExitSignal
+        pruned_any = False
+        for pair in list(self.stop_loss_manager.positions.keys()):
+            pos = self.stop_loss_manager.positions.get(pair)
+            if not pos:
+                continue
+            curr_p = self.candle_manager.get_latest_price(pair) or pos.entry_price
+            val = (pos.quantity * curr_p) if pos.side == SignalAction.BUY else pos.collateral
+            if val < 2000.0:
+                self.logger.info(
+                    f"🧹 Autonomous Housekeeping: Pruning subscale position {pair} "
+                    f"(${val:.2f} < $2,000 floor) to reclaim concurrency slot"
+                )
+                exit_sig = ExitSignal(
+                    pair=pair,
+                    action=SignalAction.SELL if pos.side == SignalAction.BUY else SignalAction.SHORT_CLOSE,
+                    quantity=pos.quantity,
+                    collateral=pos.collateral,
+                    order_type="MARKET",
+                    reason=f"Autonomous subscale position pruning (${val:.2f} < $2,000 floor)",
+                )
+                success = self.order_router.execute_exit(exit_sig, current_price=curr_p)
+                if success:
+                    pruned_any = True
+                    self.logger.info(f"✅ Successfully pruned subscale position {pair}")
+
+        if pruned_any:
+            bal = self.client.get_balance()
+            if bal and bal.get("Success", False):
+                wallet = bal.get("SpotWallet") or bal.get("Wallet", {})
+                self.free_usd = float(wallet.get("USD", {}).get("Free", getattr(self, "free_usd", 100000.0)))
+                self.locked_usd = float(wallet.get("USD", {}).get("Lock", 0.0))
+
     def _evaluate_and_enter_trades(self) -> None:
         active_pairs = list(self.stop_loss_manager.positions.keys())
+        is_dynamic = getattr(trading_config, "DYNAMIC_CONCURRENCY_ENABLED", False)
         max_positions = getattr(trading_config, "MAX_CONCURRENT_POSITIONS", 8)
-        max_allowed = max(0, max_positions - len(active_pairs))
+
+        # Count positions with meaningful capital (>= $2,500) towards the concurrency cap
+        primary_active_count = 0
+        for p, pos in self.stop_loss_manager.positions.items():
+            curr_p = self.candle_manager.get_latest_price(p) or pos.entry_price
+            val = (pos.quantity * curr_p) if pos.side == SignalAction.BUY else pos.collateral
+            if val >= 2500.0:
+                primary_active_count += 1
+
+        max_allowed = max(0, max_positions - primary_active_count)
         if max_allowed <= 0:
             return
 
@@ -332,7 +383,8 @@ class TradingDaemon:
             return
 
         signals.sort(key=lambda s: s.conviction, reverse=True)
-        signals = signals[:max_allowed]
+        if not is_dynamic:
+            signals = signals[:max_allowed]
 
         regime_res = self.regime_detector.detect_regime(self.candle_manager)
         current_heat = self.stop_loss_manager.get_portfolio_risk_heat(self.portfolio_equity)
@@ -363,7 +415,6 @@ class TradingDaemon:
                 signal=sig,
                 portfolio_equity=self.portfolio_equity,
                 free_usd=self.free_usd,
-                prefer_maker=True,
                 size_result=order,
             )
             if success:
