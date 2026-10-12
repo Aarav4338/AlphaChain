@@ -95,7 +95,6 @@ fi
 mkdir -p /opt
 rm -rf /opt/alphachain
 git clone --branch {DEPLOY_BRANCH} {clone_url} /opt/alphachain
-git -C /opt/alphachain remote set-url origin https://github.com/Aarav4338/Carrotcuant.git
 mkdir -p /opt/alphachain/data /opt/alphachain/logs
 
 # 4. Write Production .env (strictly isolated, chmod 600)

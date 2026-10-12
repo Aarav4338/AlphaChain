@@ -121,11 +121,11 @@ class TradingConfig:
             self.MAX_ALLOCATION_PER_COIN_PCT = 0.20  # Up to $20,000 per coin on top conviction
             self.MIN_CASH_BUFFER_PCT = 0.20          # 80% capital deployment with 20% safe cash floor
             self.MIN_POSITION_CAPITAL_USD = 8000.0   # Enforce $8,000 minimum trade capital floor (no micro-dust)
-            self.STOP_LOSS_ATR_MULT = 1.50
-            self.TAKE_PROFIT_ATR_MULT = 2.20         # Multi-ATR profit target
-            self.BREAKEVEN_ACTIVATION_ATR_MULT = 1.20
-            self.TRAILING_ACTIVATION_ATR_MULT = 1.80
-            self.TRAILING_DISTANCE_ATR_MULT = 1.50
+            self.STOP_LOSS_ATR_MULT = 1.80           # Healthy stop distance to absorb intraday noise wicks
+            self.TAKE_PROFIT_ATR_MULT = 3.00         # Multi-ATR profit target (+5% to +8%) for asymmetric payoff
+            self.BREAKEVEN_ACTIVATION_ATR_MULT = 1.80 # Let winners breathe; do not choke them at 1.2x ATR
+            self.TRAILING_ACTIVATION_ATR_MULT = 2.20  # Trail runners after 2.2x ATR
+            self.TRAILING_DISTANCE_ATR_MULT = 1.60
             self.MAX_HOLDING_BARS = 0               # No arbitrary time barrier; let runners run!
             self.PYRAMIDING_ENABLED = False         # Full size entered upfront into top conviction trades
         elif profile == "pyramiding_optimal":

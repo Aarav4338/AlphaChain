@@ -86,9 +86,19 @@ class MultiRegimeAlphaStrategy:
                 elif regime == MarketRegime.BEAR:
                     continue
             elif sig.action == SignalAction.SHORT_OPEN:
+                btc_candles = cm.get_candles("BTC/USD", timeframe="1h")
+                btc_bullish = False
+                if btc_candles is not None and len(btc_candles) >= 50:
+                    btc_ema50 = float(btc_candles["close"].ewm(span=50, adjust=False).mean().iloc[-1])
+                    btc_curr = float(btc_candles["close"].iloc[-1])
+                    btc_bullish = btc_curr > btc_ema50
+
+                if btc_bullish:
+                    continue  # Never short altcoins when BTC is trending or drifting upward above EMA50!
+
                 if regime == MarketRegime.BEAR and sig.conviction >= 0.50:
                     filtered_signals.append(sig)
-                elif regime == MarketRegime.CHOP and sig.conviction >= 0.35:
+                elif regime == MarketRegime.CHOP and sig.conviction >= 0.45:
                     filtered_signals.append(sig)
 
         filtered_signals.sort(key=lambda s: s.conviction, reverse=True)

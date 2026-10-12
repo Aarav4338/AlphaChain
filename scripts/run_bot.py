@@ -165,6 +165,7 @@ class TradingDaemon:
                 self._evaluate_circuit_breaker()
                 self._manage_active_positions()
                 self._prune_subscale_positions()
+                self._prune_counter_trend_shorts()
                 self._evaluate_pyramid_scale_ins()
 
                 if self.circuit_breaker.is_trading_allowed():
@@ -356,6 +357,52 @@ class TradingDaemon:
                 self.free_usd = float(wallet.get("USD", {}).get("Free", getattr(self, "free_usd", 100000.0)))
                 self.locked_usd = float(wallet.get("USD", {}).get("Lock", 0.0))
 
+    def _prune_counter_trend_shorts(self) -> None:
+        """
+        Autonomous daemon housekeeping:
+        Safely closes counter-trend short positions if BTC macro trend is bullish (BTC > EMA50)
+        to prevent fighting the crypto market tide and reclaim cash for top momentum longs.
+        """
+        btc_candles = self.candle_manager.get_candles("BTC/USD", timeframe="1h")
+        if btc_candles is None or len(btc_candles) < 50:
+            return
+
+        btc_ema50 = float(btc_candles["close"].ewm(span=50, adjust=False).mean().iloc[-1])
+        btc_curr = float(btc_candles["close"].iloc[-1])
+        if btc_curr <= btc_ema50:
+            return
+
+        from risk.stop_loss_manager import ExitSignal
+        pruned_any = False
+        for pair in list(self.stop_loss_manager.positions.keys()):
+            pos = self.stop_loss_manager.positions.get(pair)
+            if not pos or pos.side != SignalAction.SHORT_OPEN:
+                continue
+
+            curr_p = self.candle_manager.get_latest_price(pair) or pos.entry_price
+            self.logger.info(
+                f"🧹 Autonomous Housekeeping: Closing counter-trend short {pair} "
+                f"(BTC @ {btc_curr:.1f} > EMA50 {btc_ema50:.1f}) to reallocate capital into momentum longs"
+            )
+            exit_sig = ExitSignal(
+                pair=pair,
+                action=SignalAction.SHORT_CLOSE,
+                quantity=pos.quantity,
+                collateral=pos.collateral,
+                order_type="MARKET",
+                reason="Autonomous counter-trend short pruning (BTC bullish above EMA50)",
+            )
+            success = self.order_router.execute_exit(exit_sig, current_price=curr_p)
+            if success:
+                pruned_any = True
+
+        if pruned_any:
+            bal = self.client.get_balance()
+            if bal and bal.get("Success", False):
+                wallet = bal.get("SpotWallet") or bal.get("Wallet", {})
+                self.free_usd = float(wallet.get("USD", {}).get("Free", getattr(self, "free_usd", 100000.0)))
+                self.locked_usd = float(wallet.get("USD", {}).get("Lock", 0.0))
+
     def _evaluate_and_enter_trades(self) -> None:
         active_pairs = list(self.stop_loss_manager.positions.keys())
         is_dynamic = getattr(trading_config, "DYNAMIC_CONCURRENCY_ENABLED", False)
@@ -537,6 +584,16 @@ class TradingDaemon:
 
         try:
             import subprocess
+            token = os.getenv("GITHUB_TOKEN", "").strip()
+            if token:
+                auth_url = f"https://x-access-token:{token}@github.com/Aarav4338/Carrotcuant.git"
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", auth_url],
+                    cwd=str(PROJECT_ROOT),
+                    capture_output=True,
+                    timeout=10,
+                )
+
             fetch_res = subprocess.run(
                 ["git", "fetch", "origin", "main"],
                 cwd=str(PROJECT_ROOT),
@@ -555,7 +612,7 @@ class TradingDaemon:
                 timeout=10,
             )
             remote_res = subprocess.run(
-                ["git", "rev-parse", "origin/main"],
+                ["git", "rev-parse", "FETCH_HEAD"],
                 cwd=str(PROJECT_ROOT),
                 capture_output=True,
                 text=True,
@@ -571,7 +628,7 @@ class TradingDaemon:
                     f"Syncing and restarting daemon via systemd..."
                 )
                 subprocess.run(
-                    ["git", "reset", "--hard", "origin/main"],
+                    ["git", "reset", "--hard", "FETCH_HEAD"],
                     cwd=str(PROJECT_ROOT),
                     capture_output=True,
                     timeout=20,

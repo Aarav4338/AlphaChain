@@ -60,22 +60,30 @@ class StateReconciler:
         # 3. Load locally saved positions from SQLite
         saved_positions = {p["pair"]: p for p in self.db.get_active_positions()} if self.db is not None else {}
 
-        # 4. Fetch matched orders from Roostoo to extract exact historical entry timestamps
+        # 4. Fetch matched orders from Roostoo to extract exact historical entry timestamps and prices
         orders_res = self.client.query_order()
         matched_orders = orders_res.get("OrderMatched", []) if orders_res and orders_res.get("Success", False) else []
         order_fill_times: Dict[str, float] = {}
+        order_fill_prices: Dict[str, float] = {}
         for o in matched_orders:
             p = o.get("Pair")
             if p and o.get("Status") == "FILLED":
                 cts = o.get("CreateTimestamp")
+                price = float(o.get("Price", 0.0))
                 if cts and p not in order_fill_times:
                     order_fill_times[p] = float(cts) / 1000.0
+                if price > 0.0 and p not in order_fill_prices:
+                    order_fill_prices[p] = price
 
         # 5. Fetch live tickers as fallback pricing for spot holdings
         ticker_res = self.client.get_ticker()
         ticker_data: Dict[str, Dict[str, Any]] = {}
         if ticker_res and ticker_res.get("Success", False):
             ticker_data = ticker_res.get("Data", {})
+
+        from config.trading_config import trading_config
+        sl_mult = getattr(trading_config, "STOP_LOSS_ATR_MULT", 1.80)
+        tp_mult = getattr(trading_config, "TAKE_PROFIT_ATR_MULT", 3.00)
 
         # ----------------------------------------------------------------------
         # Reconcile Spot Long Holdings
@@ -105,10 +113,25 @@ class StateReconciler:
                 # Reconstruct position in StopLossManager if missing
                 if pair not in self.stop_loss_manager.positions:
                     saved = saved_positions.get(pair)
-                    entry_p = float(saved["entry_price"]) if saved else last_price
-                    stop_p = float(saved["stop_loss"]) if saved else (last_price * 0.95)
-                    take_p = float(saved["take_profit"]) if saved else (last_price * 1.10)
-                    atr = float(saved["atr"]) if saved else (last_price * 0.03)
+                    entry_p = float(saved["entry_price"]) if saved else order_fill_prices.get(pair, last_price)
+                    
+                    # Compute true ATR from candle history if not in database
+                    atr = float(saved["atr"]) if saved else 0.0
+                    if atr <= 0.0 and self.candle_manager is not None:
+                        candles = self.candle_manager.get_candles(pair, timeframe="1h")
+                        if candles is not None and len(candles) >= 14:
+                            import pandas as pd
+                            tr = pd.concat([
+                                candles["high"] - candles["low"],
+                                (candles["high"] - candles["close"].shift()).abs(),
+                                (candles["low"] - candles["close"].shift()).abs()
+                            ], axis=1).max(axis=1)
+                            atr = float(tr.rolling(14).mean().iloc[-1])
+                    if atr <= 0.0:
+                        atr = entry_p * 0.015
+
+                    stop_p = float(saved["stop_loss"]) if saved else (entry_p - (atr * sl_mult))
+                    take_p = float(saved["take_profit"]) if saved else (entry_p + (atr * tp_mult))
                     pos_entry_time = order_fill_times.get(pair, 0.0)
 
                     self.stop_loss_manager.register_position(
@@ -122,7 +145,10 @@ class StateReconciler:
                         atr=atr,
                         entry_time=pos_entry_time,
                     )
-                    logger.info(f"Restored Long position for {pair}: {coin_qty} coins (Value: ${coin_value:.2f}, EntryTime: {pos_entry_time})")
+                    logger.info(
+                        f"Restored Long position for {pair}: {coin_qty} coins | "
+                        f"Entry: ${entry_p:.4f} | Stop: ${stop_p:.4f} | ATR: ${atr:.4f} | Value: ${coin_value:.2f}"
+                    )
 
         # ----------------------------------------------------------------------
         # Reconcile Spot Short Holdings
@@ -142,9 +168,22 @@ class StateReconciler:
 
             if pair and pair not in self.stop_loss_manager.positions:
                 saved = saved_positions.get(pair)
-                stop_p = float(saved["stop_loss"]) if saved else (entry_p * 1.05)
-                take_p = float(saved["take_profit"]) if saved else (entry_p * 0.90)
-                atr = float(saved["atr"]) if saved else (entry_p * 0.03)
+                atr = float(saved["atr"]) if saved else 0.0
+                if atr <= 0.0 and self.candle_manager is not None:
+                    candles = self.candle_manager.get_candles(pair, timeframe="1h")
+                    if candles is not None and len(candles) >= 14:
+                        import pandas as pd
+                        tr = pd.concat([
+                            candles["high"] - candles["low"],
+                            (candles["high"] - candles["close"].shift()).abs(),
+                            (candles["low"] - candles["close"].shift()).abs()
+                        ], axis=1).max(axis=1)
+                        atr = float(tr.rolling(14).mean().iloc[-1])
+                if atr <= 0.0:
+                    atr = entry_p * 0.015
+
+                stop_p = float(saved["stop_loss"]) if saved else (entry_p + (atr * sl_mult))
+                take_p = float(saved["take_profit"]) if saved else (entry_p - (atr * tp_mult))
                 pos_entry_time = order_fill_times.get(pair, 0.0)
 
                 self.stop_loss_manager.register_position(
@@ -158,7 +197,10 @@ class StateReconciler:
                     atr=atr,
                     entry_time=pos_entry_time,
                 )
-                logger.info(f"Restored Short position for {pair}: Collateral=${collateral:.2f}")
+                logger.info(
+                    f"Restored Short position for {pair}: Collateral=${collateral:.2f} | "
+                    f"Entry: ${entry_p:.4f} | Stop: ${stop_p:.4f}"
+                )
 
         # Compute total portfolio equity without double-counting margin collateral
         # If locked_usd in wallet already holds short collateral, do not count it twice
