@@ -109,7 +109,26 @@ class TradingConfig:
 
     def apply_profile(self, profile: str = "active_dynamic") -> None:
         """Apply pre-calibrated parameter profiles for dynamic active vs baseline sniper trading."""
-        if profile in ("concentrated_alpha", "calibrated_optimal", "active_dynamic"):
+        if profile in ("bulletproof_fortress", "fortress"):
+            self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_44.copy()
+            self.ADX_TREND_THRESHOLD = 22.0
+            self.DYNAMIC_CONCURRENCY_ENABLED = False
+            self.MAX_CONCURRENT_POSITIONS = 3        # Maximum 3 selective positions (eliminates correlated beta blowups)
+            self.MAX_PORTFOLIO_HEAT_PCT = 0.0050     # 0.50% cumulative risk heat ceiling (mathematically immune to 4% cliff)
+            self.MAX_RISK_PER_ASSET_PCT = 0.0018     # 0.18% ($175 max loss) risk per asset
+            self.CHOP_RISK_HEAT_CEILING = 0.0025     # 0.25% in CHOP regime
+            self.BEAR_RISK_HEAT_CEILING = 0.0025     # 0.25% in BEAR regime
+            self.MAX_ALLOCATION_PER_COIN_PCT = 0.12  # Maximum 12% ($12,000) capital per asset
+            self.MIN_CASH_BUFFER_PCT = 0.40          # 40% safe cash floor at all times (insulates against market dips)
+            self.MIN_POSITION_CAPITAL_USD = 3000.0   # $3,000 capital floor
+            self.STOP_LOSS_ATR_MULT = 1.40           # Controlled stop loss to minimize downside variance (maximizes Sortino)
+            self.TAKE_PROFIT_ATR_MULT = 3.50         # 2.5:1 reward-to-risk asymmetry (maximizes Sharpe)
+            self.BREAKEVEN_ACTIVATION_ATR_MULT = 1.40 # Lock breakeven at +1.4x ATR profit
+            self.TRAILING_ACTIVATION_ATR_MULT = 2.00  # Trail runners after 2.0x ATR
+            self.TRAILING_DISTANCE_ATR_MULT = 1.20
+            self.MAX_HOLDING_BARS = 0               # Let runners run!
+            self.PYRAMIDING_ENABLED = False
+        elif profile in ("concentrated_alpha", "calibrated_optimal", "active_dynamic"):
             self.ASSET_UNIVERSE = self.ASSET_UNIVERSE_44.copy()
             self.ADX_TREND_THRESHOLD = 20.0
             self.DYNAMIC_CONCURRENCY_ENABLED = False

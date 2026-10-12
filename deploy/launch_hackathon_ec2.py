@@ -55,7 +55,7 @@ def get_env_content() -> str:
     if not has_mode:
         out_lines.append("TRADING_MODE=competition\n")
 
-    out_lines.append("TRADING_PROFILE=concentrated_alpha\n")
+    out_lines.append("TRADING_PROFILE=bulletproof_fortress\n")
     return "".join(out_lines)
 
 def get_clone_url() -> str:
@@ -244,7 +244,7 @@ def deploy_to_ec2():
         "launch_template": LAUNCH_TEMPLATE_ID,
         "trading_mode": "competition",
         "branch": DEPLOY_BRANCH,
-        "profile": "concentrated_alpha"
+        "profile": "bulletproof_fortress"
     }
 
     DEPLOY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)

@@ -54,11 +54,25 @@ class MultiRegimeAlphaStrategy:
         cm = candle_manager or self.candle_manager
         active_set = set(active_pairs or [])
 
+        # 1. Macro Bitcoin Directional Gate (Multi-Timeframe Trend Verification)
+        btc_1h = cm.get_candles("BTC/USD", timeframe="1h")
+        btc_bullish = False
+        btc_bearish = False
+        if btc_1h is not None and len(btc_1h) >= 30:
+            btc_ema20 = float(btc_1h["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+            btc_ema50 = float(btc_1h["close"].ewm(span=50, adjust=False).mean().iloc[-1]) if len(btc_1h) >= 50 else btc_ema20
+            btc_curr = float(btc_1h["close"].iloc[-1])
+            # Confirmed Bullish: BTC price above both EMA20 and EMA50, EMA20 >= EMA50
+            btc_bullish = (btc_curr > btc_ema20) and (btc_curr > btc_ema50) and (btc_ema20 >= btc_ema50)
+            # Confirmed Bearish: BTC price below both EMA20 and EMA50, EMA20 <= EMA50
+            btc_bearish = (btc_curr < btc_ema20) and (btc_curr < btc_ema50) and (btc_ema20 <= btc_ema50)
+
+        # 2. Flash-drop volatility breaker on 15m
         block_buys = False
         btc_15 = cm.get_candles("BTC/USD", timeframe="15m")
         if btc_15 is not None and len(btc_15) >= 2:
             last_btc_ret = (btc_15["close"].iloc[-1] - btc_15["open"].iloc[-1]) / btc_15["open"].iloc[-1]
-            if last_btc_ret < -0.008:
+            if last_btc_ret < -0.005:
                 block_buys = True
 
         regime_result = self.regime_detector.detect_regime(cm, timeframe="1h")
@@ -75,31 +89,37 @@ class MultiRegimeAlphaStrategy:
         filtered_signals: List[TradeSignal] = []
 
         for sig in candidate_signals:
+            is_btc = (sig.pair == "BTC/USD")
+
             if sig.action == SignalAction.BUY:
                 if block_buys:
                     continue
-                if regime == MarketRegime.BULL:
-                    filtered_signals.append(sig)
-                elif regime == MarketRegime.CHOP:
-                    if sig.conviction >= 0.35:
+
+                if is_btc:
+                    # Bitcoin longs permitted in BULL or high-conviction CHOP pullback
+                    if regime == MarketRegime.BULL and btc_bullish:
                         filtered_signals.append(sig)
-                elif regime == MarketRegime.BEAR:
-                    continue
+                    elif regime == MarketRegime.CHOP and sig.conviction >= 0.50 and btc_curr > btc_ema20:
+                        filtered_signals.append(sig)
+                else:
+                    # Altcoin longs STRICTLY require Bitcoin confirmed bullish macro trend
+                    if not btc_bullish:
+                        continue  # Never buy altcoins when BTC is weak or below EMAs
+                    if regime == MarketRegime.BULL and sig.conviction >= 0.40:
+                        filtered_signals.append(sig)
+                    # In CHOP or BEAR, altcoin longs are completely prohibited to eliminate whipsaws
+
             elif sig.action == SignalAction.SHORT_OPEN:
-                btc_candles = cm.get_candles("BTC/USD", timeframe="1h")
-                btc_bullish = False
-                if btc_candles is not None and len(btc_candles) >= 50:
-                    btc_ema50 = float(btc_candles["close"].ewm(span=50, adjust=False).mean().iloc[-1])
-                    btc_curr = float(btc_candles["close"].iloc[-1])
-                    btc_bullish = btc_curr > btc_ema50
-
-                if btc_bullish:
-                    continue  # Never short altcoins when BTC is trending or drifting upward above EMA50!
-
-                if regime == MarketRegime.BEAR and sig.conviction >= 0.50:
-                    filtered_signals.append(sig)
-                elif regime == MarketRegime.CHOP and sig.conviction >= 0.45:
-                    filtered_signals.append(sig)
+                if is_btc:
+                    # Bitcoin shorts permitted in BEAR when confirmed bearish
+                    if regime == MarketRegime.BEAR and btc_bearish and sig.conviction >= 0.45:
+                        filtered_signals.append(sig)
+                else:
+                    # Altcoin shorts STRICTLY require Bitcoin confirmed bearish macro breakdown
+                    if not btc_bearish:
+                        continue  # Never short altcoins when BTC is stable, drifting, or bullish
+                    if regime == MarketRegime.BEAR and sig.conviction >= 0.50:
+                        filtered_signals.append(sig)
 
         filtered_signals.sort(key=lambda s: s.conviction, reverse=True)
 
@@ -107,5 +127,5 @@ class MultiRegimeAlphaStrategy:
             return filtered_signals
         return filtered_signals[:trading_config.MAX_CONCURRENT_POSITIONS]
 
-    def record_exit(self, pair: str, current_bar_index: int, net_pnl: float = 0.0) -> None:
-        self.linear_model.record_exit(pair, current_bar_index, net_pnl)
+    def record_exit(self, pair: str, current_bar_index: int, net_pnl: float = 0.0, action: Optional[SignalAction] = None) -> None:
+        self.linear_model.record_exit(pair, current_bar_index, net_pnl, action=action)

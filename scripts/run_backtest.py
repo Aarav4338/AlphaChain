@@ -465,8 +465,8 @@ def main():
     parser.add_argument(
         "--profile",
         type=str,
-        default="calibrated_optimal",
-        choices=["baseline_sniper", "calibrated_optimal", "pyramiding_optimal", "active_dynamic"],
+        default="bulletproof_fortress",
+        choices=["baseline_sniper", "calibrated_optimal", "pyramiding_optimal", "active_dynamic", "concentrated_alpha", "bulletproof_fortress", "fortress"],
         help="Trading strategy configuration profile to simulate",
     )
     parser.add_argument(

@@ -42,7 +42,9 @@ class TradingDaemon:
             log_dir=settings.LOGS_DIR,
             log_level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
         )
-        profile = os.getenv("TRADING_PROFILE", "concentrated_alpha")
+        profile = os.getenv("TRADING_PROFILE", "bulletproof_fortress")
+        if profile in ("concentrated_alpha", "pyramiding_optimal", "legacy", None, ""):
+            profile = "bulletproof_fortress"
         trading_config.apply_profile(profile)
         self.logger.info(f"Initializing AlphaChain Autonomous Trading Daemon (Profile: {profile})")
 
@@ -166,6 +168,7 @@ class TradingDaemon:
                 self._manage_active_positions()
                 self._prune_subscale_positions()
                 self._prune_counter_trend_shorts()
+                self._prune_counter_trend_longs()
                 self._evaluate_pyramid_scale_ins()
 
                 if self.circuit_breaker.is_trading_allowed():
@@ -263,7 +266,7 @@ class TradingDaemon:
             if exit_sig:
                 success = self.order_router.execute_exit(exit_sig, current_price=last_p)
                 if success:
-                    self.strategy.record_exit(pair, self.iteration_count, net_pnl=self.order_router.last_realized_pnl)
+                    self.strategy.record_exit(pair, self.iteration_count, net_pnl=self.order_router.last_realized_pnl, action=pos.side)
                     bal = self.client.get_balance()
                     if bal and bal.get("Success", False):
                         wallet = bal.get("SpotWallet") or bal.get("Wallet", {})
@@ -391,6 +394,57 @@ class TradingDaemon:
                 collateral=pos.collateral,
                 order_type="MARKET",
                 reason="Autonomous counter-trend short pruning (BTC bullish above EMA50)",
+            )
+            success = self.order_router.execute_exit(exit_sig, current_price=curr_p)
+            if success:
+                pruned_any = True
+
+        if pruned_any:
+            bal = self.client.get_balance()
+            if bal and bal.get("Success", False):
+                wallet = bal.get("SpotWallet") or bal.get("Wallet", {})
+                self.free_usd = float(wallet.get("USD", {}).get("Free", getattr(self, "free_usd", 100000.0)))
+                self.locked_usd = float(wallet.get("USD", {}).get("Lock", 0.0))
+
+    def _prune_counter_trend_longs(self) -> None:
+        """
+        Autonomous daemon housekeeping:
+        Safely closes counter-trend altcoin long positions if BTC macro trend is confirmed bearish
+        (BTC < EMA50 and BTC < EMA20) to prevent holding falling altcoins during a Bitcoin dump.
+        (BTC/USD itself is never pruned by this method).
+        """
+        btc_candles = self.candle_manager.get_candles("BTC/USD", timeframe="1h")
+        if btc_candles is None or len(btc_candles) < 50:
+            return
+
+        btc_ema20 = float(btc_candles["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+        btc_ema50 = float(btc_candles["close"].ewm(span=50, adjust=False).mean().iloc[-1])
+        btc_curr = float(btc_candles["close"].iloc[-1])
+        if btc_curr >= btc_ema50 or btc_curr >= btc_ema20:
+            return  # BTC is not in a confirmed macro breakdown
+
+        from risk.stop_loss_manager import ExitSignal
+        pruned_any = False
+        for pair in list(self.stop_loss_manager.positions.keys()):
+            if pair == "BTC/USD":
+                continue  # Never prune BTC itself
+
+            pos = self.stop_loss_manager.positions.get(pair)
+            if not pos or pos.side != SignalAction.BUY:
+                continue
+
+            curr_p = self.candle_manager.get_latest_price(pair) or pos.entry_price
+            self.logger.info(
+                f"🧹 Autonomous Housekeeping: Closing counter-trend altcoin long {pair} "
+                f"(BTC @ {btc_curr:.1f} < EMA50 {btc_ema50:.1f}) to preserve cash and halt downside beta"
+            )
+            exit_sig = ExitSignal(
+                pair=pair,
+                action=SignalAction.SELL,
+                quantity=pos.quantity,
+                collateral=0.0,
+                order_type="MARKET",
+                reason="Autonomous counter-trend long pruning (BTC confirmed bearish breakdown)",
             )
             success = self.order_router.execute_exit(exit_sig, current_price=curr_p)
             if success:
@@ -577,8 +631,8 @@ class TradingDaemon:
         Completely eliminates the need for manual SSH/SSM deployment!
         """
         now = time.time()
-        # Check every 5 minutes (300 seconds)
-        if now - getattr(self, "_last_update_check", 0.0) < 300.0:
+        # Check every 60 seconds for rapid synchronization
+        if now - getattr(self, "_last_update_check", 0.0) < 60.0:
             return
         self._last_update_check = now
 
@@ -633,6 +687,16 @@ class TradingDaemon:
                     capture_output=True,
                     timeout=20,
                 )
+                # Ensure .env also reflects bulletproof_fortress
+                env_file = PROJECT_ROOT / ".env"
+                if env_file.exists():
+                    try:
+                        content = env_file.read_text(encoding="utf-8")
+                        if "TRADING_PROFILE=concentrated_alpha" in content:
+                            new_content = content.replace("TRADING_PROFILE=concentrated_alpha", "TRADING_PROFILE=bulletproof_fortress")
+                            env_file.write_text(new_content, encoding="utf-8")
+                    except Exception:
+                        pass
                 self.running = False
                 sys.exit(0)
         except Exception as e:

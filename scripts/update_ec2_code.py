@@ -97,14 +97,15 @@ def main():
         "cd \"$APP_DIR\"",
         "git fetch origin main",
         "git reset --hard origin/main",
+        "if [ -f \"$APP_DIR/.env\" ]; then if grep -q \"TRADING_PROFILE=\" \"$APP_DIR/.env\"; then sed -i 's/^TRADING_PROFILE=.*/TRADING_PROFILE=bulletproof_fortress/' \"$APP_DIR/.env\"; else echo \"TRADING_PROFILE=bulletproof_fortress\" >> \"$APP_DIR/.env\"; fi; fi",
         "echo '--- LATEST COMMIT ON EC2 ---'",
         "git log -n 1 --oneline",
         "echo '--- RESTARTING ALPHACHAIN SERVICE ---'",
         "systemctl restart alphachain.service || systemctl restart carrotquant.service || true",
-        "sleep 3",
+        "sleep 5",
         "systemctl status alphachain.service --no-pager || true",
         "echo '--- RECENT LOG ENTRIES ---'",
-        "tail -n 15 $APP_DIR/logs/*.log 2>/dev/null || true"
+        "tail -n 30 $APP_DIR/logs/*.log 2>/dev/null || true"
     ]
 
     status, stdout, stderr = run_ssm_command(ssm, commands)

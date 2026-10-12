@@ -383,9 +383,15 @@ class CryptoLinearFactorModel:
                 stop_dist = max(atr_val * 1.5, curr_p * 0.015)
                 target_dist = stop_dist * 2.0
 
+                last_action = getattr(self, "last_exit_actions", {}).get(pair)
+
                 if mu_pred > self.cost_hurdle:
                     if (regime == "BEAR" or getattr(regime, "name", "") == "BEAR") and curr_p < ema_50:
                         continue
+                    # Anti-Whipsaw Direction Lock: If recently stopped out of SHORT, do not reverse into LONG
+                    if last_action in (SignalAction.SHORT_OPEN, SignalAction.SHORT_CLOSE) and loss_count > 0:
+                        if current_bar_index - last_exit < 24:
+                            continue
                     signals.append(
                         TradeSignal(
                             pair=pair,
@@ -401,6 +407,10 @@ class CryptoLinearFactorModel:
                 elif mu_pred < -self.cost_hurdle:
                     if (regime == "BULL" or getattr(regime, "name", "") == "BULL") and curr_p > ema_50:
                         continue
+                    # Anti-Whipsaw Direction Lock: If recently stopped out of LONG, do not reverse into SHORT
+                    if last_action in (SignalAction.BUY, SignalAction.SELL) and loss_count > 0:
+                        if current_bar_index - last_exit < 24:
+                            continue
                     signals.append(
                         TradeSignal(
                             pair=pair,
@@ -417,8 +427,12 @@ class CryptoLinearFactorModel:
         signals.sort(key=lambda s: s.conviction, reverse=True)
         return signals
 
-    def record_exit(self, pair: str, current_bar_index: int, net_pnl: float = 0.0) -> None:
+    def record_exit(self, pair: str, current_bar_index: int, net_pnl: float = 0.0, action: Optional[SignalAction] = None) -> None:
         self.last_exit_times[pair] = current_bar_index
+        if not hasattr(self, "last_exit_actions"):
+            self.last_exit_actions = {}
+        if action is not None:
+            self.last_exit_actions[pair] = action
         if net_pnl < 0:
             self.consecutive_losses[pair] = self.consecutive_losses.get(pair, 0) + 1
         elif net_pnl > 0:
