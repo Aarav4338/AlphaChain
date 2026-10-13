@@ -90,9 +90,10 @@ class MultiRegimeAlphaStrategy:
 
         for sig in candidate_signals:
             is_btc = (sig.pair == "BTC/USD")
+            is_equity = sig.pair.endswith("B/USD")
 
             if sig.action == SignalAction.BUY:
-                if block_buys:
+                if block_buys and not is_equity:
                     continue
 
                 if is_btc:
@@ -100,6 +101,19 @@ class MultiRegimeAlphaStrategy:
                     if regime == MarketRegime.BULL and btc_bullish:
                         filtered_signals.append(sig)
                     elif regime == MarketRegime.CHOP and sig.conviction >= 0.50 and btc_curr > btc_ema20:
+                        filtered_signals.append(sig)
+                elif is_equity:
+                    # US Equities evaluated independently of Bitcoin macro gate
+                    eq_1h = cm.get_candles(sig.pair, timeframe="1h")
+                    eq_bullish = False
+                    if eq_1h is not None and len(eq_1h) >= 20:
+                        eq_close = float(eq_1h["close"].iloc[-1])
+                        eq_ema20 = float(eq_1h["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+                        eq_bullish = (eq_close > eq_ema20)
+                    else:
+                        eq_bullish = True
+
+                    if eq_bullish and sig.conviction >= 0.35:
                         filtered_signals.append(sig)
                 else:
                     # Altcoin longs STRICTLY require Bitcoin confirmed bullish macro trend
@@ -113,6 +127,19 @@ class MultiRegimeAlphaStrategy:
                 if is_btc:
                     # Bitcoin shorts permitted in BEAR when confirmed bearish
                     if regime == MarketRegime.BEAR and btc_bearish and sig.conviction >= 0.45:
+                        filtered_signals.append(sig)
+                elif is_equity:
+                    # US Equities evaluated independently of Bitcoin macro gate
+                    eq_1h = cm.get_candles(sig.pair, timeframe="1h")
+                    eq_bearish = False
+                    if eq_1h is not None and len(eq_1h) >= 20:
+                        eq_close = float(eq_1h["close"].iloc[-1])
+                        eq_ema20 = float(eq_1h["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+                        eq_bearish = (eq_close < eq_ema20)
+                    else:
+                        eq_bearish = True
+
+                    if eq_bearish and sig.conviction >= 0.45:
                         filtered_signals.append(sig)
                 else:
                     # Altcoin shorts STRICTLY require Bitcoin confirmed bearish macro breakdown

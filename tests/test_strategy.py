@@ -92,3 +92,43 @@ def test_multi_regime_alpha_strategy():
     assert top_signal.stop_loss_price < top_signal.entry_price
     assert top_signal.take_profit_price > top_signal.entry_price
     assert top_signal.atr > 0
+
+
+def test_us_equity_decoupled_from_btc_chop():
+    """
+    GIVEN: Bitcoin is in dead CHOP (flat drift, low ADX).
+    GIVEN: A US Equity (METAB/USD) is in a clean bullish uptrend.
+    EXPECTED: METAB generates an allowed BUY signal, decoupled from Bitcoin's chop gate.
+    """
+    from config.trading_config import trading_config
+    trading_config.apply_profile("bulletproof_fortress")
+
+    manager = CandleManager(max_buffer_size=150)
+
+    # Setup BTC in flat CHOP
+    btc_chop_df = make_candle_df(100, trend_slope=0.0, vol=0.001)
+    manager.initialize_pair_history("BTC/USD", "1h", btc_chop_df)
+    manager.initialize_pair_history("BTC/USD", "15m", btc_chop_df)
+
+    # Setup METAB in strong bull trend
+    meta_df = make_candle_df(100, trend_slope=0.004, vol=0.005)
+    manager.initialize_pair_history("METAB/USD", "1h", meta_df)
+    manager.initialize_pair_history("METAB/USD", "15m", meta_df)
+
+    # Setup SOL (crypto altcoin)
+    sol_df = make_candle_df(100, trend_slope=0.002, vol=0.005)
+    manager.initialize_pair_history("SOL/USD", "1h", sol_df)
+    manager.initialize_pair_history("SOL/USD", "15m", sol_df)
+
+    strategy = MultiRegimeAlphaStrategy()
+    signals = strategy.generate_signals(manager, active_pairs=[])
+
+    # Altcoins like SOL must be gated in CHOP
+    sol_signals = [s for s in signals if s.pair == "SOL/USD"]
+    assert len(sol_signals) == 0
+
+    # US Equity METAB must be allowed through
+    meta_signals = [s for s in signals if s.pair == "METAB/USD"]
+    assert len(meta_signals) > 0
+    assert meta_signals[0].action == SignalAction.BUY
+

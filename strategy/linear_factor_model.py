@@ -95,9 +95,10 @@ class CryptoLinearFactorModel:
         n = len(merged)
         factors = pd.DataFrame(index=range(n))
 
-        if pair == self.benchmark_pair:
-            lead_lag = pd.Series(r_btc).rolling(6, min_periods=2).sum().values
-            idio_mom = pd.Series(r_btc).rolling(12, min_periods=4).sum().values
+        is_equity = pair.endswith("B/USD")
+        if pair == self.benchmark_pair or is_equity:
+            lead_lag = pd.Series(r_asset).rolling(6, min_periods=2).sum().values
+            idio_mom = pd.Series(r_asset).rolling(12, min_periods=4).sum().values
         else:
             beta_window = 24
             betas = np.ones(n)
