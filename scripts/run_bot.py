@@ -378,6 +378,8 @@ class TradingDaemon:
         from risk.stop_loss_manager import ExitSignal
         pruned_any = False
         for pair in list(self.stop_loss_manager.positions.keys()):
+            if pair.endswith("B/USD"):
+                continue  # Never prune US equities based on BTC trend; they are decoupled
             pos = self.stop_loss_manager.positions.get(pair)
             if not pos or pos.side != SignalAction.SHORT_OPEN:
                 continue
@@ -411,7 +413,7 @@ class TradingDaemon:
         Autonomous daemon housekeeping:
         Safely closes counter-trend altcoin long positions if BTC macro trend is confirmed bearish
         (BTC < EMA50 and BTC < EMA20) to prevent holding falling altcoins during a Bitcoin dump.
-        (BTC/USD itself is never pruned by this method).
+        (BTC/USD and decoupled US equities are never pruned by this method).
         """
         btc_candles = self.candle_manager.get_candles("BTC/USD", timeframe="1h")
         if btc_candles is None or len(btc_candles) < 50:
@@ -426,8 +428,8 @@ class TradingDaemon:
         from risk.stop_loss_manager import ExitSignal
         pruned_any = False
         for pair in list(self.stop_loss_manager.positions.keys()):
-            if pair == "BTC/USD":
-                continue  # Never prune BTC itself
+            if pair == "BTC/USD" or pair.endswith("B/USD"):
+                continue  # Never prune BTC itself or decoupled US equities
 
             pos = self.stop_loss_manager.positions.get(pair)
             if not pos or pos.side != SignalAction.BUY:
